@@ -49,6 +49,12 @@ def main(verbose: bool = False, quiet: bool = False):
     help="Output directory (default: in-place conversion)"
 )
 @click.option(
+    "--pdb-version",
+    type=click.Choice(['v2', 'v3'], case_sensitive=False),
+    default='v3',
+    help="PDB writer version (v3 is REX-compliant, default: v3)"
+)
+@click.option(
     "--analyze",
     is_flag=True,
     help="Generate waveforms by analyzing audio files"
@@ -66,6 +72,7 @@ def main(verbose: bool = False, quiet: bool = False):
 def convert(
     source: Path,
     output: Optional[Path],
+    pdb_version: str,
     analyze: bool,
     analyze_missing: bool,
     no_copy: bool,
@@ -82,9 +89,10 @@ def convert(
         click.echo(f"   Source: {source}")
         if output:
             click.echo(f"   Output: {output}")
+        click.echo(f"   PDB Version: {pdb_version}")
 
         # Initialize converter
-        converter = Converter(source, output)
+        converter = Converter(source, output, pdb_version=pdb_version)
 
         # Parse source
         click.echo(f"\n📖 Parsing OneLibrary database...")

@@ -10,7 +10,8 @@ from typing import Optional
 from tqdm import tqdm
 
 from onelib_to_devicelib.parsers.onelib import OneLibraryParser
-from onelib_to_devicelib.writers.pdb import PDBWriter
+from onelib_to_devicelib.writers.pdb_v2 import PDBWriterV2, convert_tracks_to_pdb
+from onelib_to_devicelib.writers.pdb import PDBWriter  # Keep for exportExt.pdb
 from onelib_to_devicelib.writers.anlz import (
     ANLZGenerator,
     generate_mono_waveform,
@@ -27,16 +28,18 @@ class Converter:
     Main converter that orchestrates the conversion from OneLibrary to Device Library.
     """
 
-    def __init__(self, source_path: str | Path, output_path: Optional[str | Path] = None):
+    def __init__(self, source_path: str | Path, output_path: Optional[str | Path] = None, pdb_version: str = 'v3'):
         """
         Initialize the converter.
 
         Args:
             source_path: Path to OneLibrary USB drive root
             output_path: Optional output path (defaults to source path for in-place conversion)
+            pdb_version: PDB writer version to use ('v2' or 'v3', default: 'v3')
         """
         self.source_path = Path(source_path)
         self.output_path = Path(output_path) if output_path else self.source_path
+        self.pdb_version = pdb_version
 
         # Validate source path
         if not self.source_path.exists():
@@ -93,15 +96,27 @@ class Converter:
         # Create output directory structure
         self._create_output_structure(copy_contents)
 
-        # Initialize PDB writer
+        # Initialize old PDB writer (for exportExt.pdb only)
         self.pdb_writer = PDBWriter(self.output_path)
+
+        # Track ANLZ paths for new PDB writer
+        anlz_paths = {}
 
         # Convert tracks and generate ANLZ files
         tracks = self.parser.get_tracks()
         print(f"Converting {len(tracks)} tracks...")
 
         for track in tqdm(tracks, desc="Converting tracks"):
-            # Add track to PDB
+            # Get ANLZ directory for this track first (needed for new PDB writer)
+            anlz_dir = self._get_anlz_dir(track)
+            anlz_dir.mkdir(parents=True, exist_ok=True)
+
+            # Store ANLZ path for new PDB writer
+            # Convert to relative path from PIONEER root
+            anlz_rel = anlz_dir.relative_to(self.output_path / "PIONEER")
+            anlz_paths[track.id] = f"/{anlz_rel}"
+
+            # Add track to old PDB writer (for now, until we fully migrate)
             self.pdb_writer.add_track(track)
 
             # Get ANLZ directory for this track
@@ -192,7 +207,29 @@ class Converter:
 
         # Write PDB files
         print("Writing export.pdb and exportExt.pdb...")
-        self.pdb_writer.write()
+
+        # Use appropriate PDB writer based on version
+        if self.pdb_version == 'v3':
+            print("  Using REX-compliant PDB format (PDBWriterV3)...")
+            from onelib_to_devicelib.writers.pdb_v3 import PDBWriterV3
+            writer_v3 = PDBWriterV3(self.output_path)
+
+            for track in tracks:
+                writer_v3.add_track(track)
+
+            file_size = writer_v3.finalize()
+            stats = writer_v3.get_stats()
+            print(f"  Generated export.pdb: {file_size:,} bytes ({stats['total_pages']} pages)")
+        else:
+            # Use V2 writer
+            print("  Using enhanced PDB format (PDBWriterV2)...")
+            try:
+                convert_tracks_to_pdb(tracks, self.output_path, anlz_paths)
+            except Exception as e:
+                logger.warning(f"New PDB writer failed: {e}, falling back to old writer")
+                self.pdb_writer.write()
+
+        # Write exportExt.pdb using old writer
         self.pdb_writer.write_export_ext_pdb()
 
         # Generate supporting files
