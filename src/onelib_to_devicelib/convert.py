@@ -1,0 +1,283 @@
+"""
+Main converter class for OneLibrary to Device Library conversion.
+"""
+
+import logging
+import os
+import shutil
+from pathlib import Path
+from typing import Optional
+from tqdm import tqdm
+
+from onelib_to_devicelib.parsers.onelib import OneLibraryParser
+from onelib_to_devicelib.writers.pdb import PDBWriter
+from onelib_to_devicelib.writers.anlz import (
+    ANLZGenerator,
+    generate_mono_waveform,
+    generate_beat_grid,
+    generate_color_waveform,
+)
+from onelib_to_devicelib.utils.paths import get_pioneer_path, get_anlz_path_hash
+
+logger = logging.getLogger(__name__)
+
+
+class Converter:
+    """
+    Main converter that orchestrates the conversion from OneLibrary to Device Library.
+    """
+
+    def __init__(self, source_path: str | Path, output_path: Optional[str | Path] = None):
+        """
+        Initialize the converter.
+
+        Args:
+            source_path: Path to OneLibrary USB drive root
+            output_path: Optional output path (defaults to source path for in-place conversion)
+        """
+        self.source_path = Path(source_path)
+        self.output_path = Path(output_path) if output_path else self.source_path
+
+        # Validate source path
+        if not self.source_path.exists():
+            raise FileNotFoundError(f"Source path does not exist: {self.source_path}")
+
+        self.pioneer_path = get_pioneer_path(self.source_path)
+        if not self.pioneer_path.exists():
+            raise FileNotFoundError(
+                f"PIONEER directory not found. Is this a valid OneLibrary export? "
+                f"Expected: {self.pioneer_path}"
+            )
+
+        # Initialize components
+        self.parser = None
+        self.pdb_writer = None
+
+    def parse(self) -> OneLibraryParser:
+        """
+        Parse the OneLibrary export database.
+
+        Returns:
+            OneLibraryParser instance with parsed data
+        """
+        export_db = self.pioneer_path / "rekordbox" / "exportLibrary.db"
+
+        if not export_db.exists():
+            raise FileNotFoundError(
+                f"exportLibrary.db not found at {export_db}"
+            )
+
+        self.parser = OneLibraryParser(export_db)
+        self.parser.parse()
+
+        return self.parser
+
+    def convert(
+        self,
+        generate_waveforms: bool = False,
+        analyze_missing: bool = False,
+        copy_contents: bool = True,
+    ) -> None:
+        """
+        Perform the conversion from OneLibrary to Device Library.
+
+        Args:
+            generate_waveforms: Whether to generate waveforms from audio files
+            analyze_missing: Whether to analyze audio files with missing data
+            copy_contents: Whether to copy Contents directory to output
+        """
+        # Parse source if not already done
+        if self.parser is None:
+            self.parse()
+
+        # Create output directory structure
+        self._create_output_structure(copy_contents)
+
+        # Initialize PDB writer
+        self.pdb_writer = PDBWriter(self.output_path)
+
+        # Convert tracks and generate ANLZ files
+        tracks = self.parser.get_tracks()
+        print(f"Converting {len(tracks)} tracks...")
+
+        for track in tqdm(tracks, desc="Converting tracks"):
+            # Add track to PDB
+            self.pdb_writer.add_track(track)
+
+            # Get ANLZ directory for this track
+            anlz_dir = self._get_anlz_dir(track)
+            anlz_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create ANLZ generator
+            generator = ANLZGenerator(
+                track_path=str(track.file_path),
+                bpm=track.bpm,
+                duration_ms=int(track.duration * 1000) if track.duration else 0
+            )
+
+            # Write DAT file (always required)
+            generator.write_dat_file(anlz_dir / "ANLZ0000.DAT")
+
+            # Generate waveforms and other files if requested
+            if generate_waveforms or analyze_missing or not track.has_analysis():
+                # Get audio file path
+                audio_path = self.source_path / track.file_path
+
+                if not audio_path.exists():
+                    logger.warning(f"Audio file not found: {audio_path}")
+                    # Write minimal ANLZ files
+                    generator.write_ext_file(
+                        anlz_dir / "ANLZ0000.EXT",
+                        bytes(400)  # Placeholder waveform
+                    )
+                    generator.write_2ex_file(
+                        anlz_dir / "ANLZ0000.2EX",
+                        bytes(1200 * 3),  # Placeholder color waveform
+                        [],  # No beat grid
+                        []   # No cues
+                    )
+                    continue
+
+                try:
+                    # Generate waveform
+                    waveform = generate_mono_waveform(str(audio_path))
+                    generator.write_ext_file(anlz_dir / "ANLZ0000.EXT", waveform)
+
+                    # Generate beat grid
+                    beats = generate_beat_grid(str(audio_path))
+
+                    # Generate color waveform
+                    color_waveform = generate_color_waveform(str(audio_path))
+
+                    # Convert cues to format expected by 2EX
+                    cues = []
+                    for cue in track.hot_cues:
+                        cues.append({
+                            'id': cue.get('position_ms', 0) // 1000,  # Simple ID
+                            'position_ms': int(cue.get('position', 0)),
+                            'type': cue.get('type', 0)
+                        })
+
+                    # Write 2EX file
+                    generator.write_2ex_file(
+                        anlz_dir / "ANLZ0000.2EX",
+                        color_waveform,
+                        beats,
+                        cues
+                    )
+
+                except Exception as e:
+                    logger.error(f"Error generating ANLZ for {track.title}: {e}")
+                    # Write minimal files
+                    generator.write_ext_file(
+                        anlz_dir / "ANLZ0000.EXT",
+                        bytes(400)
+                    )
+                    generator.write_2ex_file(
+                        anlz_dir / "ANLZ0000.2EX",
+                        bytes(1200 * 3),
+                        [],
+                        []
+                    )
+            else:
+                # Use existing analysis data (copy from source)
+                self._copy_existing_anlz(track, anlz_dir)
+
+        # Convert playlists
+        playlists = self.parser.get_playlists()
+        print(f"Converting {len(playlists)} playlists...")
+
+        for playlist in tqdm(playlists, desc="Converting playlists"):
+            self.pdb_writer.add_playlist(playlist)
+
+        # Write PDB files
+        print("Writing export.pdb and exportExt.pdb...")
+        self.pdb_writer.write()
+        self.pdb_writer.write_export_ext_pdb()
+
+        # Generate supporting files
+        print("Generating supporting files...")
+        self._generate_supporting_files()
+
+        print("Conversion complete!")
+
+    def _get_anlz_dir(self, track) -> Path:
+        """Get the ANLZ directory for a track."""
+        # Generate hash from track path
+        path_hash = get_anlz_path_hash(track.file_path)
+
+        # Use playlist ID 001 for now
+        anlz_dir = (
+            self.output_path
+            / "PIONEER"
+            / "USBANLZ"
+            / f"P001"
+            / path_hash
+        )
+
+        return anlz_dir
+
+    def _copy_existing_anlz(self, track, target_dir: Path) -> None:
+        """Copy existing ANLZ files from source to target."""
+        # Find source ANLZ files
+        source_usbanlz = self.source_path / "PIONEER" / "USBANLZ"
+
+        # Search for matching ANLZ files by comparing track paths
+        for playlist_dir in source_usbanlz.glob("P*"):
+            for hash_dir in playlist_dir.glob("*"):
+                if hash_dir.is_dir():
+                    dat_file = hash_dir / "ANLZ0000.DAT"
+                    if dat_file.exists():
+                        # Copy all ANLZ files
+                        for ext in ["DAT", "EXT", "2EX"]:
+                            src = hash_dir / f"ANLZ0000.{ext}"
+                            dst = target_dir / f"ANLZ0000.{ext}"
+                            if src.exists():
+                                import shutil
+                                shutil.copy2(src, dst)
+                        logger.debug(f"Copied existing ANLZ files for {track.title}")
+                        return
+
+        # If not found, generate minimal files
+        logger.warning(f"No existing ANLZ files found for {track.title}, generating minimal ones")
+        generator = ANLZGenerator(
+            track_path=str(track.file_path),
+            bpm=track.bpm,
+            duration_ms=int(track.duration * 1000) if track.duration else 0
+        )
+        generator.write_dat_file(target_dir / "ANLZ0000.DAT")
+        generator.write_ext_file(target_dir / "ANLZ0000.EXT", bytes(400))
+        generator.write_2ex_file(
+            target_dir / "ANLZ0000.2EX",
+            bytes(1200 * 3),
+            [],
+            []
+        )
+
+    def _create_output_structure(self, copy_contents: bool) -> None:
+        """Create the output directory structure."""
+        # Create PIONEER directory
+        pioneer_output = get_pioneer_path(self.output_path)
+        pioneer_output.mkdir(parents=True, exist_ok=True)
+
+        # Create required subdirectories
+        (pioneer_output / "rekordbox").mkdir(exist_ok=True)
+        (pioneer_output / "USBANLZ").mkdir(exist_ok=True)
+        (pioneer_output / "Artwork").mkdir(exist_ok=True)
+
+        # Copy Contents directory if requested
+        if copy_contents and self.source_path != self.output_path:
+            contents_source = self.source_path / "Contents"
+            contents_output = self.output_path / "Contents"
+
+            if contents_source.exists():
+                print(f"Copying Contents directory...")
+                shutil.copytree(contents_source, contents_output)
+
+    def _generate_supporting_files(self) -> None:
+        """Generate supporting files (DEVSETTING.DAT, etc.)."""
+        from onelib_to_devicelib.writers.metadata import MetadataWriter
+
+        metadata_writer = MetadataWriter(self.output_path)
+        metadata_writer.write_devsetting()
+        metadata_writer.write_device_lib_backup()
