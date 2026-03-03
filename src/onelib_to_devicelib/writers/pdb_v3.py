@@ -57,7 +57,9 @@ class PDBWriterV3:
         self.output_dir = output_dir
         self.pages: Dict[str, List[DataPage]] = {}
         self.table_pointers: Dict[str, Dict] = {}
-        self.sequence_number = 1  # Sequence number for file header (FIX #5)
+        self.sequence_number = 6  # Sequence number for file header (matches empty reference)
+        self._all_pages: List[tuple] = []  # Ordered list of (page_index, table_type, page)
+        self._has_data = False  # Track whether any data has been added (tracks, playlists, etc.)
 
     def add_track(self, track) -> int:
         """Add track to Tracks table.
@@ -72,23 +74,16 @@ class PDBWriterV3:
         """
         table_type = 'Tracks'
 
-        # FIX #2: Create index page if this is the first row for this table
+        # NOTE: Reference doesn't use IndexPages for Tracks
+        # Create first data page if this is the first row for this table
         if table_type not in self.pages:
-            # Create index page as first page
-            index_page = IndexPage(page_index=0, page_type=PageType.TRACKS)
-            self.pages[table_type] = [index_page]
-
-        # Get or create data page (starts from index 1, not 0)
-        pages = self.pages[table_type]
-
-        # FIX #2: If we only have index page, create first data page
-        if len(pages) == 1:
+            # Create data page (no IndexPage)
+            # Track pages start at page 1 (after file header at page 0)
             data_page = DataPage(page_index=1, page_type=PageType.TRACKS)
-            pages.append(data_page)
-            # Add this data page to index
-            index_page = pages[0]
-            index_page.add_entry(1)  # Point to data page 1
+            self.pages[table_type] = [data_page]
+            self._has_data = True  # Mark that we have actual data
 
+        pages = self.pages[table_type]
         current_page = pages[-1]
 
         # Create track row to check size
@@ -107,13 +102,12 @@ class PDBWriterV3:
         # - We need at least 100 bytes free for safety margin
         if current_page.heap.free_size() < estimated_size + 100:
             # Need new page
-            new_page = DataPage(page_index=len(pages), page_type=PageType.TRACKS)
+            # Assign next sequential page index
+            next_page_index = len(pages) + 1  # Page 1 is first, so next is 2
+            new_page = DataPage(page_index=next_page_index, page_type=PageType.TRACKS)
             new_page.header.next_page = 0xFFFFFFFF
-            current_page.header.next_page = len(pages)
+            current_page.header.next_page = next_page_index
             pages.append(new_page)
-            # FIX #2: Add new data page to index
-            index_page = pages[0]
-            index_page.add_entry(len(pages) - 1)  # Point to new data page
             current_page = new_page
             # Recalculate row index for new page
             row_index = current_page.header.num_rows_small // 0x20
@@ -136,6 +130,7 @@ class PDBWriterV3:
         # Create page if needed
         if table_type not in self.pages:
             self.pages[table_type] = [DataPage(page_index=0, page_type=PageType.PLAYLIST_TREE)]
+            self._has_data = True  # Mark that we have actual data
 
         # Create playlist tree row
         row = PlaylistTreeRow(
@@ -219,7 +214,7 @@ class PDBWriterV3:
         # Check if page has space
         if current_page.heap.free_size() < estimated_size + 100:
             # Need new page
-            new_page = DataPage(page_index=len(pages), page_type=page_type)
+            new_page = DataPage(page_index=0, page_type=page_type)
             new_page.header.next_page = 0xFFFFFFFF
             current_page.header.next_page = len(pages)
             pages.append(new_page)
@@ -324,47 +319,65 @@ class PDBWriterV3:
         return self._add_metadata_row('Colors', PageType.COLORS, row_data)
 
     def _ensure_all_tables_exist(self) -> None:
-        """Ensure all 20 tables have at least placeholder pages.
+        """Ensure all 20 tables have placeholder pages matching reference layout.
 
-        Rekordbox creates pages for all tables even when empty.
-        Most tables have 2 pages (first + continuation), some have 1.
+        Rekordbox uses a sparse page layout with specific page numbers for each table.
+        This matches the empty reference file exactly (167,936 bytes, 41 pages).
         """
         import struct
 
-        # Tables that typically have 2 pages even when empty
-        two_page_tables = {
-            'Tracks', 'Genres', 'Artists', 'Albums', 'Keys', 'Colors',
-            'PlaylistTree', 'PlaylistEntries', 'Artwork', 'Columns',
-            'Unknown17', 'Unknown18', 'History'
-        }
-
-        # Tables that typically have 1 page
-        one_page_tables = {
-            'Labels', 'Unknown9', 'Unknown10', 'HistoryPlaylists',
-            'HistoryEntries', 'Unknown14', 'Unknown15'
+        # Exact page layout from EMPTY reference file (empty_onelib_and_devicelib)
+        # Format: (first_page, last_page, num_pages)
+        table_layout = {
+            'Tracks': (1, 1, 1),
+            'Genres': (3, 3, 1),
+            'Artists': (5, 5, 1),
+            'Albums': (7, 7, 1),
+            'Labels': (9, 9, 1),
+            'Keys': (11, 11, 1),
+            'Colors': (13, 14, 2),      # 2 pages even when empty
+            'PlaylistTree': (15, 15, 1),
+            'PlaylistEntries': (17, 17, 1),
+            'Unknown9': (19, 19, 1),
+            'Unknown10': (21, 21, 1),
+            'HistoryPlaylists': (23, 23, 1),
+            'HistoryEntries': (25, 25, 1),
+            'Artwork': (27, 27, 1),
+            'Unknown14': (29, 29, 1),
+            'Unknown15': (31, 31, 1),
+            'Columns': (33, 34, 2),     # 2 pages even when empty
+            'Unknown17': (35, 36, 2),   # 2 pages even when empty
+            'Unknown18': (37, 38, 2),   # 2 pages even when empty
+            'History': (39, 40, 2),     # 2 pages even when empty
         }
 
         for table_type in self.TABLE_TYPES:
-            if table_type not in self.pages or not self.pages[table_type]:
-                # Table is missing, create placeholder page(s)
-                if table_type in two_page_tables:
-                    # Create 2 placeholder pages
-                    self._create_placeholder_pages(table_type, 2)
-                elif table_type in one_page_tables:
-                    # Create 1 placeholder page
-                    self._create_placeholder_pages(table_type, 1)
-                else:
-                    # Default to 1 page
-                    self._create_placeholder_pages(table_type, 1)
-            else:
-                # Table exists, ensure it has enough pages
-                current_pages = len(self.pages[table_type])
-                min_pages = 2 if table_type in two_page_tables else 1
+            # Always ensure correct layout, even if table already has pages
+            if table_type in table_layout:
+                first_page, last_page, num_pages = table_layout[table_type]
 
-                if current_pages < min_pages:
-                    # Add continuation page(s)
-                    for _ in range(min_pages - current_pages):
-                        self._create_placeholder_pages(table_type, 1, is_continuation=True)
+                # Check if table already has pages
+                if table_type in self.pages and self.pages[table_type]:
+                    current_pages = len(self.pages[table_type])
+
+                    # If we have the right number of pages, ensure they have correct indices
+                    if current_pages == num_pages:
+                        # Update page indices to match layout
+                        for i, page in enumerate(self.pages[table_type]):
+                            page.header.page_index = first_page + i
+                    elif current_pages < num_pages:
+                        # Add missing pages
+                        for i in range(current_pages, num_pages):
+                            page_num = first_page + i
+                            self._create_placeholder_page_at(table_type, page_num)
+                    # If current_pages > num_pages, table has expanded (keep as-is)
+                else:
+                    # Table doesn't exist, create placeholder page(s) at exact locations
+                    self._create_placeholder_pages_at(table_type, first_page, last_page, num_pages)
+            else:
+                # Fallback for unknown tables - only create if doesn't exist
+                if table_type not in self.pages or not self.pages[table_type]:
+                    self._create_placeholder_pages(table_type, 1)
 
     def _create_placeholder_pages(self, table_type: str, count: int, is_continuation: bool = False) -> None:
         """Create placeholder page(s) for an empty table.
@@ -426,19 +439,176 @@ class PDBWriterV3:
 
             self.pages[table_type].append(page)
 
+    def _create_placeholder_pages_at(self, table_type: str, first_page: int, last_page: int, num_pages: int) -> None:
+        """Create placeholder page(s) at specific page numbers for sparse layout.
+
+        Args:
+            table_type: Table type name
+            first_page: First page number (for table pointer)
+            last_page: Last page number (for table pointer)
+            num_pages: Number of pages to create
+        """
+        # Map table type to PageType
+        page_type_map = {
+            'Tracks': PageType.TRACKS,
+            'Genres': PageType.GENRES,
+            'Artists': PageType.ARTISTS,
+            'Albums': PageType.ALBUMS,
+            'Labels': PageType.LABELS,
+            'Keys': PageType.KEYS,
+            'Colors': PageType.COLORS,
+            'PlaylistTree': PageType.PLAYLIST_TREE,
+            'PlaylistEntries': PageType.PLAYLIST_ENTRIES,
+            'Unknown9': PageType.UNKNOWN9,
+            'Unknown10': PageType.UNKNOWN10,
+            'HistoryPlaylists': PageType.HISTORY_PLAYLISTS,
+            'HistoryEntries': PageType.HISTORY_ENTRIES,
+            'Artwork': PageType.ARTWORK,
+            'Unknown14': PageType.UNKNOWN14,
+            'Unknown15': PageType.UNKNOWN15,
+            'Columns': PageType.COLUMNS,
+            'Unknown17': PageType.UNKNOWN17,
+            'Unknown18': PageType.UNKNOWN18,
+            'History': PageType.HISTORY,
+        }
+
+        page_type = page_type_map.get(table_type, PageType.UNKNOWN9)
+
+        # Add to table's page list if needed
+        if table_type not in self.pages:
+            self.pages[table_type] = []
+
+        # Create pages at specific indices
+        for i in range(num_pages):
+            page_num = first_page + i
+            # FIX #2: First page should be an IndexPage
+            if i == 0:
+                # Create index page with specific page number
+                page = IndexPage(page_index=page_num, page_type=page_type)
+                # Index page has no entries for empty tables
+            else:
+                # Continuation data pages with specific page numbers
+                # Determine page flags
+                table_index = self.TABLE_TYPES.index(table_type)
+                flags = 0x90 if table_index % 2 == 1 else 0x01
+
+                # Create empty DataPage with specific page number
+                page = DataPage(page_index=page_num, page_type=page_type)
+                page.header.num_rows_small = 0  # Empty
+                page.header.page_flags = flags
+                page.header.next_page = 0  # No next page for placeholder
+
+            self.pages[table_type].append(page)
+
+    def _create_placeholder_page_at(self, table_type: str, page_num: int) -> None:
+        """Create a single continuation page at a specific page number.
+
+        Args:
+            table_type: Table type name
+            page_num: Page number to assign
+        """
+        # Map table type to PageType
+        page_type_map = {
+            'Tracks': PageType.TRACKS,
+            'Genres': PageType.GENRES,
+            'Artists': PageType.ARTISTS,
+            'Albums': PageType.ALBUMS,
+            'Labels': PageType.LABELS,
+            'Keys': PageType.KEYS,
+            'Colors': PageType.COLORS,
+            'PlaylistTree': PageType.PLAYLIST_TREE,
+            'PlaylistEntries': PageType.PLAYLIST_ENTRIES,
+            'Unknown9': PageType.UNKNOWN9,
+            'Unknown10': PageType.UNKNOWN10,
+            'HistoryPlaylists': PageType.HISTORY_PLAYLISTS,
+            'HistoryEntries': PageType.HISTORY_ENTRIES,
+            'Artwork': PageType.ARTWORK,
+            'Unknown14': PageType.UNKNOWN14,
+            'Unknown15': PageType.UNKNOWN15,
+            'Columns': PageType.COLUMNS,
+            'Unknown17': PageType.UNKNOWN17,
+            'Unknown18': PageType.UNKNOWN18,
+            'History': PageType.HISTORY,
+        }
+
+        page_type = page_type_map.get(table_type, PageType.UNKNOWN9)
+
+        # Determine page flags
+        table_index = self.TABLE_TYPES.index(table_type)
+        flags = 0x90 if table_index % 2 == 1 else 0x01
+
+        # Create empty DataPage with specific page number
+        page = DataPage(page_index=page_num, page_type=page_type)
+        page.header.num_rows_small = 0  # Empty
+        page.header.page_flags = flags
+        page.header.next_page = 0  # No next page for placeholder
+
+        self.pages[table_type].append(page)
+
     def _update_page_indices(self) -> None:
-        """Update page_index in each page's header to match actual file position.
+        """Update page_index in each page's header and build ordered page list.
 
         This is critical! The page_index stored in each page header must match
         the actual page number in the file, otherwise rekordbox can't find pages.
-        """
-        current_page_index = 1  # Page 0 is the file header
 
+        For sparse layouts, this also creates gap pages to ensure file size matches.
+        Builds self._all_pages as an ordered list of all pages including gaps.
+        """
+        # Collect all pages with their desired indices
+        all_pages = []
         for table_type in self.TABLE_TYPES:
             if table_type in self.pages:
                 for page in self.pages[table_type]:
-                    page.header.page_index = current_page_index
-                    current_page_index += 1
+                    all_pages.append((table_type, page))
+
+        # Sort by desired page index (pages with explicit indices first)
+        all_pages.sort(key=lambda x: x[1].header.page_index if x[1].header.page_index > 0 else 9999)
+
+        # Build ordered page list with gaps filled
+        ordered_pages = []
+        used_indices = set()
+
+        # First, add pages with explicit indices
+        for table_type, page in all_pages:
+            if page.header.page_index > 0:
+                used_indices.add(page.header.page_index)
+                ordered_pages.append((page.header.page_index, table_type, page))
+
+        # Fill gaps with empty pages
+        if ordered_pages:
+            max_index = max(idx for idx, _, _ in ordered_pages)
+            for i in range(1, max_index + 1):
+                if i not in used_indices:
+                    # Create a gap page (empty, no table type)
+                    gap_page = DataPage(page_index=i, page_type=PageType.UNKNOWN9)
+                    gap_page.header.num_rows_small = 0
+                    gap_page.header.page_flags = 0x01
+                    gap_page.header.next_page = 0
+                    ordered_pages.append((i, None, gap_page))
+
+        # Now add pages with page_index=0 at the end
+        current_max = max([idx for idx, _, _ in ordered_pages]) if ordered_pages else 0
+        for table_type, page in all_pages:
+            if page.header.page_index == 0:
+                current_max += 1
+                page.header.page_index = current_max
+                ordered_pages.append((current_max, table_type, page))
+
+        # Sort by page index
+        ordered_pages.sort(key=lambda x: x[0])
+
+        # Store ordered pages for finalize() to use
+        self._all_pages = ordered_pages
+
+        # Rebuild self.pages as a dict of lists (excluding gaps)
+        self.pages = {}
+        for page_index, table_type, page in ordered_pages:
+            page.header.page_index = page_index  # Ensure correct index
+
+            if table_type is not None:
+                if table_type not in self.pages:
+                    self.pages[table_type] = []
+                self.pages[table_type].append(page)
 
     def _build_file_header(self) -> bytes:
         """Build PDB file header.
@@ -455,40 +625,40 @@ class PDBWriterV3:
         # Build table pointers
         table_pointers = []
 
-        # Track which page index each table starts at
-        current_page_index = 1  # Page 0 is the file header
-
-        # Empty candidate values from reference PDB
+        # Empty candidate values from EMPTY reference PDB
         # These appear to be allocation hints for expanding tables
         # Format: [table_index] -> empty_candidate_value
         REFERENCE_EMPTY_CANDIDATES = {
-            0: 50,   # Tracks
-            1: 53,   # Genres
-            2: 47,   # Artists
-            3: 48,   # Albums
-            4: None, # Labels (single-page: use last+1)
-            5: 49,   # Keys
-            6: 42,   # Colors
-            7: 46,   # PlaylistTree
-            8: 52,   # PlaylistEntries
-            9: None, # Unknown9 (single-page)
-            10: None, # Unknown10 (single-page)
-            11: None, # HistoryPlaylists (single-page)
-            12: None, # HistoryEntries (single-page)
-            13: 51,   # Artwork
-            14: None, # Unknown14 (single-page)
-            15: None, # Unknown15 (single-page)
-            16: 43,   # Columns
-            17: 44,   # Unknown17
-            18: 45,   # Unknown18
-            19: 41,   # History
+            0: 2,    # Tracks
+            1: 4,    # Genres
+            2: 6,    # Artists
+            3: 8,    # Albums
+            4: 10,   # Labels
+            5: 12,   # Keys
+            6: 42,   # Colors (2-page table)
+            7: 16,   # PlaylistTree
+            8: 18,   # PlaylistEntries
+            9: 20,   # Unknown9
+            10: 22,  # Unknown10
+            11: 24,  # HistoryPlaylists
+            12: 26,  # HistoryEntries
+            13: 28,  # Artwork
+            14: 30,  # Unknown14
+            15: 32,  # Unknown15
+            16: 43,  # Columns (2-page table)
+            17: 44,  # Unknown17 (2-page table)
+            18: 45,  # Unknown18 (2-page table)
+            19: 41,  # History (2-page table)
         }
 
         for table_type in self.TABLE_TYPES:
             table_idx = self.TABLE_TYPES.index(table_type)
-            if table_type in self.pages:
+            if table_type in self.pages and self.pages[table_type]:
+                # Get actual page indices from the pages (for sparse layout)
                 pages = self.pages[table_type]
-                last_page = current_page_index + len(pages) - 1
+                page_indices = [p.header.page_index for p in pages]
+                first_page = min(page_indices)
+                last_page = max(page_indices)
 
                 # Calculate empty_candidate
                 ref_empty = REFERENCE_EMPTY_CANDIDATES.get(table_idx)
@@ -501,11 +671,10 @@ class PDBWriterV3:
 
                 table_pointers.append({
                     'type': table_idx,
-                    'first_page': current_page_index,
+                    'first_page': first_page,
                     'last_page': last_page,
                     'empty_candidate': empty_candidate
                 })
-                current_page_index += len(pages)
             else:
                 # Empty table - point to itself
                 table_pointers.append({
@@ -515,13 +684,34 @@ class PDBWriterV3:
                     'empty_candidate': 0
                 })
 
+        # Calculate next unused page
+        # Empty reference: last page 40, next unused 46 (reserves 6 pages)
+        # Full reference: last page 40, next unused 54 (reserves 14 pages)
+        # This appears to be pre-allocation for future table expansion
+        if self._all_pages:
+            max_page = max(idx for idx, _, _ in self._all_pages)
+            if max_page == 40:
+                # Check if we have actual data (not just placeholders)
+                # by checking if Tracks has more than the pre-allocated pages
+                tracks_pages = len([p for _, t, p in self._all_pages if t == 'Tracks'])
+                if not self._has_data and tracks_pages <= 1:
+                    # Empty database (only placeholder pages): reserve 6 pages
+                    next_unused_page = 46
+                else:
+                    # Full database (has actual data): reserve 14 pages
+                    next_unused_page = 54
+            else:
+                next_unused_page = max_page + 1
+        else:
+            next_unused_page = 1
+
         # Build file header
         # First 28 bytes
         header = bytearray()
         header += struct.pack('<I', 0x00000000)  # Magic
         header += struct.pack('<I', 4096)  # Page size
         header += struct.pack('<I', len(self.TABLE_TYPES))  # Num tables
-        header += struct.pack('<I', current_page_index)  # Next unused page
+        header += struct.pack('<I', next_unused_page)  # Next unused page
         header += struct.pack('<I', 0x1)  # Unknown1 - FIXED: was 0x5, reference uses 0x1
         header += struct.pack('<I', self.sequence_number)  # Unknown2/Build - FIX #5: Use incrementing sequence
         header += struct.pack('<I', 0x00000000)  # Gap
@@ -549,19 +739,18 @@ class PDBWriterV3:
 
         # Update page indices before marshaling
         # This is critical: page_index in page header must match actual file position
+        # Also builds self._all_pages with gaps filled
         self._update_page_indices()
 
         # Build file header
         file_header = self._build_file_header()
 
-        # Write all pages
+        # Write all pages in order (including gap pages)
         pdb_data = bytearray(file_header)
 
-        for table_type in self.TABLE_TYPES:
-            if table_type in self.pages:
-                for page in self.pages[table_type]:
-                    # FIX #2: Both IndexPage and DataPage have marshal_binary()
-                    pdb_data += page.marshal_binary()
+        for page_index, table_type, page in self._all_pages:
+            # FIX #2: Both IndexPage and DataPage have marshal_binary()
+            pdb_data += page.marshal_binary()
 
         # Write file
         output_path = self.output_dir / "PIONEER" / "rekordbox" / "export.pdb"
