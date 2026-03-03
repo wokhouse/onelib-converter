@@ -50,9 +50,9 @@ def main(verbose: bool = False, quiet: bool = False):
 )
 @click.option(
     "--pdb-version",
-    type=click.Choice(['v2', 'v3'], case_sensitive=False),
+    type=click.Choice(['v2', 'v3', 'minimal'], case_sensitive=False),
     default='v3',
-    help="PDB writer version (v3 is REX-compliant, default: v3)"
+    help="PDB writer version: v3 (with metadata), minimal (tracks only), v2 (legacy)"
 )
 @click.option(
     "--analyze",

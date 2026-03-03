@@ -4,7 +4,134 @@
 
 The OneLib to DeviceLib Converter converts OneLibrary USB drives exported from djay Pro into dual-format (OneLibrary + Device Library) exports compatible with older Pioneer DJ hardware (CDJ-2000NXS, CDJ-900NXS).
 
-**Current Status**: ✅ **Enhanced PDB Implementation Complete**
+**Current Status**: 🔄 **Active PDB Format Refinement** - 19.6% of reference file size achieved
+
+---
+
+## 🤖 For AI Agents: Quick Start
+
+### How to Work Effectively on This Project
+
+**IMPORTANT**: Always use the comparison pipeline as your feedback loop!
+
+```bash
+# After ANY code change, run this to see impact:
+./test_pdb.sh
+```
+
+### Development Workflow
+
+1. **Understand the current state** - Read the "Current Focus" section below
+2. **Make targeted changes** - Edit specific files based on the goal
+3. **Test immediately** - Run `./test_pdb.sh` to see the impact
+4. **Analyze output** - Check if file size increased, tables populated, or fields matched
+5. **Iterate** - Make next change based on test results
+
+**Never make blind changes** - always use the test output to guide your work.
+
+### Current Focus (2026-03-02)
+
+**Active Goal**: Achieve bitwise identical (or as close as possible) PDB output to match `validation_data/onelib_and_devicelib` reference.
+
+**Current Progress**:
+- File size: 45,056 bytes (19.6% of 229,376 byte reference)
+- Tables populated: 8/20 (Tracks, Genres, Artists, Albums, Keys, Colors, PlaylistTree, PlaylistEntries)
+- Track metadata: Most critical fields working (checksum, composer_id, key_id, duration)
+
+**Next Priority Tasks**:
+1. ✅ COMPLETED: Fix track metadata extraction (duration, year, track_number, composer_id, key_id)
+2. ✅ COMPLETED: Add Colors table
+3. ✅ COMPLETED: Add playlist support (PlaylistTree, PlaylistEntries)
+4. ⏳ IN PROGRESS: Investigate track row size discrepancy (we have 3 pages, reference has 55)
+5. ⏳ TODO: Fix file header fields (unknown1, sequence)
+6. ⏳ TODO: Add remaining empty tables (Artwork, History, Columns, Unknown tables)
+
+### Tool Guidelines
+
+**Preferred Tools** (use these over bash commands):
+- **Read** - Read files (instead of `cat`)
+- **Edit** - Edit files (instead of `sed`)
+- **Glob** - Find files by pattern (instead of `find`)
+- **Grep** - Search file contents (instead of `grep`)
+- **Bash** - Only for: git, npm/pip, test execution, file system operations
+
+**Project-Specific Tools**:
+```bash
+./test_pdb.sh              # Run PDB comparison test (DO THIS AFTER EVERY CHANGE)
+source .venv/bin/activate  # Activate virtual environment before running Python
+```
+
+### What NOT to Do
+
+- ❌ Don't edit multiple files at once without testing
+- ❌ Don't make large refactors without running tests between changes
+- ❌ Don't skip the test step - it's your only feedback mechanism
+- ❌ Don't change file paths or project structure without asking
+- ❌ Don't modify validation data files
+- ❌ Don't create new documentation files (README, INSTALLATION, etc.) - they're in the plan but not priority
+
+### What to Prioritize
+
+**High Impact Changes** (do these first):
+1. Fix obvious field mismatches in track rows
+2. Add missing tables that have data
+3. Populate missing track metadata fields
+
+**Lower Priority**:
+- Code refactoring/cleanup
+- Adding error messages
+- Optimization
+- Documentation
+
+### Success Metrics
+
+When you make changes, look for improvement in:
+- **File size percentage** (should increase toward 100%)
+- **Number of tables populated** (should increase toward 20)
+- **Matching field count** (more ✓ marks in field comparison)
+- **Reduced binary differences** (fewer `>>>` and `<<<` markers in hex dump)
+
+**Good progress example**:
+```
+Before: File size 12.5%, 4 tables, 5 matching fields
+After:  File size 19.6%, 8 tables, 9 matching fields
+```
+
+### Key Files to Understand
+
+**Core Implementation**:
+- `src/onelib_to_devicelib/writers/track.py` - Track row structure (132 bytes)
+- `src/onelib_to_devicelib/writers/pdb_v3.py` - PDB writer orchestrator
+- `src/onelib_to_devicelib/parsers/onelib.py` - Database parser
+- `src/onelib_to_devicelib/writers/metadata_rows.py` - Metadata row structures
+
+**Testing**:
+- `tests/test_pdb_comparison.py` - Comparison test script
+- `./test_pdb.sh` - Quick test runner
+- `validation_data/onelib_only` - Test data (OneLibrary only)
+- `validation_data/onelib_and_devicelib` - Reference data (both formats)
+
+### Common Patterns
+
+**Adding a new table**:
+1. Create row structure in `metadata_rows.py`
+2. Add import to `pdb_v3.py`
+3. Add `add_*` method to `PDBWriterV3` class
+4. Update `convert.py` and `test_pdb_comparison.py` to populate table
+5. Run `./test_pdb.sh` to verify
+
+**Fixing track field mismatches**:
+1. Check test output for ✗ marks in "Field-by-Field Comparison"
+2. Find field in `TrackHeader` or `TrackRow` classes
+3. Update field initialization to use correct track attribute
+4. Run `./test_pdb.sh` to verify fix
+
+### When to Ask for Clarification
+
+- 🤔 Unsure which file to modify? → Ask, don't guess
+- 🤔 Multiple approaches possible? → Present options and ask which to try
+- 🤔 Test output confusing? → Share the output and ask for interpretation
+- 🤔 Need to make large changes? → Describe the plan and ask for approval
 
 ---
 
@@ -21,37 +148,110 @@ The OneLib to DeviceLib Converter converts OneLibrary USB drives exported from d
 
 ## Current Status
 
-### ✅ Completed Implementation
+### 🔄 Active PDB Format Refinement (Phase 2)
 
-The converter is **functionally complete** with all core features implemented:
+**Current Progress** (as of 2026-03-02):
+- File size: 45,056 bytes (19.6% of 229,376 byte reference) - **+57% growth!**
+- Tables populated: 8/20 (was 4)
+- Track metadata: Most critical fields working
 
-- ✅ OneLibrary database reader (pyrekordbox `DeviceLibraryPlus`)
-- ✅ PDB file writer (`export.pdb` and `exportExt.pdb`)
-- ✅ ANLZ file generator (DAT/EXT/2EX with waveforms and beat grids)
-- ✅ Metadata file generators (DEVSETTING.DAT, DeviceLibBackup)
-- ✅ CLI interface with convert/info/validate commands
-- ✅ Successfully tested with validation data (33 tracks, 4 playlists)
+### ✅ Recently Completed (Phase 1 & 2)
 
-### 📊 Test Results
+**Track Metadata Fixes**:
+- ✅ Fixed `checksum`, `unnamed7`, `unnamed8` to match reference values
+- ✅ Enhanced parser to extract `track_number`, `year`, `disc_number`, `composer_id`, `key_id`
+- ✅ Fixed `duration` extraction (was incorrectly dividing by 1000)
+
+**New Tables Added**:
+- ✅ Colors table (12 rekordbox colors)
+- ✅ PlaylistTree table (folders and playlists)
+- ✅ PlaylistEntries table (track-to-playlist links)
+
+### 📊 Comparison Test Results
 
 ```
 Source: validation_data/onelib_only
 - Tracks: 33
-- Playlists: 4 (3 after filtering folders)
+- Playlists: 4 (1 folder + 3 playlists)
 - ANLZ files: 33 (DAT/EXT/2EX for each track)
 
-Generated Output:
-- export.pdb: 20,480 bytes (ENHANCED from 12,288)
-- exportExt.pdb: 4,096 bytes
-- DEVSETTING.DAT: 125 bytes
-- 33 ANLZ directories with proper structure
+Generated PDB (latest):
+- export.pdb: 45,056 bytes (11 pages)
+- Tables populated: 8/20
+  - Tracks (3 pages)
+  - Genres, Artists, Albums (1 page each)
+  - Keys, Colors (1 page each)
+  - PlaylistTree, PlaylistEntries (1 page each)
 
-Comparison with Reference (onelib_and_devicelib):
-- export.pdb: 20,480 bytes vs 229,376 bytes (11.2x smaller)
-- Pages: 5 vs 56
-- Structure: ✅ Matches (rekordbox, USBANLZ, Artwork, DeviceLibBackup)
-- ANLZ count: ✅ Match (33 each)
+Reference PDB (onelib_and_devicelib):
+- export.pdb: 229,376 bytes (56 pages)
+- Tables populated: 20/20
+
+Track Field Comparison (matching reference):
+- ✅ checksum: 0x0b1b10e6
+- ✅ unnamed7: 0x63da
+- ✅ unnamed8: 0x52ef
+- ✅ composer_id: 2
+- ✅ key_id: 1
+- ✅ duration: Now properly extracted
 ```
+
+### ⏳ Known Issues
+
+**Track Pages Discrepancy**:
+- Reference: 55 pages of tracks
+- Ours: 3 pages of tracks
+- Likely cause: Row size smaller than reference or different string storage
+
+**File Header Fields**:
+- `unknown1`: 0x5 vs 0x1 (reference)
+- `sequence`: 1 vs 132 (reference)
+
+**Missing Tables** (12 empty):
+- Labels (table 4) - no data in source
+- Artwork (table 13)
+- History (tables 11, 12, 19)
+- Unknown tables (9, 10, 14, 15, 16, 17, 18)
+
+### 🔍 Interpreting Test Output
+
+When you run `./test_pdb.sh`, here's what to look for:
+
+**File Size Section**:
+```
+File Size Comparison:
+  Reference: 229,376 bytes (56 pages)
+  Generated: 45,056 bytes (11 pages)
+  ✗ Size differs by 184,320 bytes (19.6% of reference)
+```
+- **Goal**: Increase percentage toward 100%
+- Each new table adds 4,096 bytes minimum
+
+**Table Pointers Section**:
+```
+Table Pointers:
+  ✗ [ 0] Tracks               ref:1-55 (55p)  gen:1-3 (3p)
+  ✗ [ 5] Keys                 ref:11-12 (2p)  gen:7-7 (1p)
+  ✓ [ 6] Colors               ref:13-14 (2p)  gen:8-8 (1p)  # Good!
+```
+- `gen:0-0 (0p)` means table is empty
+- Adding populated tables = progress
+
+**Field-by-Field Comparison**:
+```
+  ✓ checksum            : ref=0x0b1b10e6 gen=0x0b1b10e6  # Match!
+  ✗ duration            : ref=235        gen=0           # Fix needed
+```
+- More ✓ marks = better
+- Focus on fields that should match but don't
+
+**Binary Dump**:
+```
+  0000:    >>> 24 00 00 00 24 00 00 00 <<<  # Differences marked
+  0010:    24 00 00 00 24 00 00 00            # Match (no markers)
+```
+- Fewer `>>>` and `<<<` markers = better
+- First 16 bytes now match = great progress!
 
 ---
 
@@ -1152,6 +1352,55 @@ pytest tests/test_convert.py -v
 
 ---
 
+## Quick Reference for Agents
+
+### Essential Commands
+
+```bash
+# Run comparison test (DO THIS AFTER EVERY CHANGE)
+./test_pdb.sh
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Convert and test (full workflow)
+onelib-to-devicelib convert validation_data/onelib_only --output /tmp/test_convert --no-copy
+./test_pdb.sh
+
+# Check specific aspects
+./test_pdb.sh 2>&1 | grep "File Size"
+./test_pdb.sh 2>&1 | grep -A 30 "Field-by-Field"
+./test_pdb.sh 2>&1 | grep "Table Pointers" -A 25
+```
+
+### File Locations
+
+**Implementation**:
+- Track structure: `src/onelib_to_devicelib/writers/track.py:135-183`
+- PDB writer: `src/onelib_to_devicelib/writers/pdb_v3.py`
+- Parser: `src/onelib_to_devicelib/parsers/onelib.py`
+- Metadata rows: `src/onelib_to_devicelib/writers/metadata_rows.py`
+
+**Test Files**:
+- Comparison script: `tests/test_pdb_comparison.py`
+- Test runner: `test_pdb.sh`
+- Reference PDB: `validation_data/onelib_and_devicelib/PIONEER/rekordbox/export.pdb`
+- Source data: `validation_data/onelib_only/PIONEER/rekordbox/exportLibrary.db`
+
+### Progress Tracking
+
+**Current Metrics** (update these as you make changes):
+- File size: 45,056 bytes (19.6% of reference)
+- Tables: 8/20 populated
+- Matching track fields: 9+ critical fields
+
+**Target Metrics** (what we're aiming for):
+- File size: >100 KB (44% of reference)
+- Tables: 15+/20 populated
+- Track pages: 10+ pages (currently 3, reference has 55)
+
+---
+
 ## Contributing
 
 Contributions are welcome! Please:
@@ -1180,6 +1429,6 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**Status**: ✅ MVP Complete - Ready for Testing!
+**Status**: 🔄 Phase 2 Complete - PDB format refinement in progress (19.6% of reference, 8/20 tables)
 
-*Last Updated: 2025-03-02*
+*Last Updated: 2026-03-02*
