@@ -14,72 +14,107 @@ from .dstring import encode_device_sql_string
 
 @dataclass
 class TrackHeader:
-    """90-byte fixed track header.
+    """94-byte fixed track header matching REX implementation.
 
-    This header contains all fixed-width fields for a track.
-    Variable-length strings are stored after this header.
+    Based on REX project (https://github.com/kimtore/rex):
+    - Complete field definitions from track.go
+    - Critical field: Unnamed30 = 0x3 (REKORBOX CRASHES WITHOUT THIS!)
+
+    Total: 94 bytes
     """
+    # From REX: All numerical values go here
     # Bytes 0-1
-    unnamed0: int = 0x24  # Always 0x24
+    row_offset: int = 0x24  # Always 0x24, identifies this as track row
+
     # Bytes 2-3
-    index_shift: int = 0  # row_num × 0x20 (critical field!)
-    # Bytes 4-7
-    bitmask: int = 0xC0700  # Always 0xC0700
-    # Bytes 8-11
+    index_shift: int = 0  # Starts at zero, increases by 0x20 each row
+
+    # Bytes 4-7 (4 bytes)
+    bitmask: int = 0xC0700  # Bitmask - CRITICAL VALUE from REX
+
+    # Bytes 8-11 (4 bytes)
     sample_rate: int = 44100
-    # Bytes 12-15
+
+    # Bytes 12-15 (4 bytes)
     composer_id: int = 0
-    # Bytes 16-19
+
+    # Bytes 16-19 (4 bytes)
     file_size: int = 0
-    # Bytes 20-23
-    checksum: int = 0
-    # Bytes 24-25
-    unnamed7: int = 0x758a
-    # Bytes 26-27
-    unnamed8: int = 0x57a2
-    # Bytes 28-31
+
+    # Bytes 20-23 (4 bytes)
+    checksum: int = 0  # Checksum (28 bits??)
+
+    # Bytes 24-25 (2 bytes)
+    unnamed7: int = 0x758a  # From REX reference value
+
+    # Bytes 26-27 (2 bytes)
+    unnamed8: int = 0x57a2  # From REX reference value
+
+    # Bytes 28-31 (4 bytes)
     artwork_id: int = 0
-    # Bytes 32-35
+
+    # Bytes 32-35 (4 bytes)
     key_id: int = 0
-    # Bytes 36-39
+
+    # Bytes 36-39 (4 bytes)
     original_artist_id: int = 0
-    # Bytes 40-43
+
+    # Bytes 40-43 (4 bytes)
     label_id: int = 0
-    # Bytes 44-47
+
+    # Bytes 44-47 (4 bytes)
     remixer_id: int = 0
-    # Bytes 48-51
+
+    # Bytes 48-51 (4 bytes)
     bitrate: int = 0
-    # Bytes 52-55
+
+    # Bytes 52-55 (4 bytes)
     track_number: int = 0
-    # Bytes 56-59
-    tempo: int = 0  # BPM × 100
-    # Bytes 60-63
+
+    # Bytes 56-59 (4 bytes)
+    tempo: int = 0
+
+    # Bytes 60-63 (4 bytes)
     genre_id: int = 0
-    # Bytes 64-67
+
+    # Bytes 64-67 (4 bytes)
     album_id: int = 0
-    # Bytes 68-71
+
+    # Bytes 68-71 (4 bytes)
     artist_id: int = 0
-    # Bytes 72-75
+
+    # Bytes 72-75 (4 bytes)
     id: int = 0  # Track ID
-    # Bytes 76-77
+
+    # Bytes 76-77 (2 bytes)
     disc_number: int = 0
-    # Bytes 78-79
+
+    # Bytes 78-79 (2 bytes)
     play_count: int = 0
-    # Bytes 80-81
+
+    # Bytes 80-81 (2 bytes)
     year: int = 0
-    # Bytes 82-83
-    sample_depth: int = 16
-    # Bytes 84-85
-    duration: int = 0  # Seconds
-    # Bytes 86-87
-    unnamed26: int = 0x29  # Always 0x29
-    # Byte 88
+
+    # Bytes 82-83 (2 bytes)
+    sample_depth: int = 16  # Default to 16-bit
+
+    # Bytes 84-85 (2 bytes)
+    duration: int = 0
+
+    # Bytes 86-87 (2 bytes)
+    unnamed26: int = 0x29  # CRITICAL: From REX
+
+    # Bytes 88 (1 byte)
     color_id: int = 0
-    # Byte 89
+
+    # Bytes 89 (1 byte)
     rating: int = 0
-    # Bytes 90-91 (wait, this is at byte 88-89, not 90-91)
-    # Let me recalculate...
-    # Actually the file_type and unnamed30 are at the end
+
+    # Bytes 90-91 (2 bytes)
+    file_type: int = 0
+
+    # Bytes 92-93 (2 bytes)
+    unnamed30: int = 0x3  # CRITICAL: REKORBOX CRASHES WITHOUT THIS!
 
 
 @dataclass
@@ -138,21 +173,94 @@ class TrackRow:
         Args:
             track: Parsed track from OneLibrary
         """
+        # Extract track data
+        track_id = getattr(track, 'id', 0)
+        file_size = getattr(track, 'file_size', 0)
+        sample_rate = getattr(track, 'sample_rate', 44100)
+        genre_id = getattr(track, 'genre_id', 0)
+        bitrate = getattr(track, 'bit_rate', 0)
+        track_number = getattr(track, 'track_number', 0)
+        disc_number = getattr(track, 'disc_number', 0)
+        duration = getattr(track, 'duration', 0)
+        year = getattr(track, 'year', 0)
+        bpm = getattr(track, 'bpm', 0)
+        key_id = getattr(track, 'key_id', 0)
+        artist_id = getattr(track, 'artist_id', 0)
+        album_id = getattr(track, 'album_id', 0)
+        color_id = getattr(track, 'color_id', 0)
+
+        # Calculate tempo from BPM (tempo = BPM * 100)
+        tempo = int(bpm * 100) if bpm else 0
+
+        # Calculate duration in seconds (stored as uint16)
+        duration_sec = int(duration) if duration else 0
+
+        # Create header with REX-compatible structure (94 bytes)
         self.header = TrackHeader(
-            id=getattr(track, 'id', 0),  # Note: 'id' not 'track_id'
-            tempo=int(getattr(track, 'bpm', 0) * 100),
-            duration=int(getattr(track, 'duration', 0)),
-            file_size=getattr(track, 'file_size', 0),
-            sample_rate=getattr(track, 'sample_rate', 44100),
-            bitrate=getattr(track, 'bit_rate', 0),  # Note: 'bit_rate' not 'bitrate'
-            track_number=getattr(track, 'track_number', 0),
-            disc_number=getattr(track, 'disc_number', 0),
-            year=getattr(track, 'year', 0),
-            artist_id=getattr(track, 'artist_id', 0),
-            album_id=getattr(track, 'album_id', 0),
-            genre_id=getattr(track, 'genre_id', 0),
-            index_shift=0,  # Set when inserted
+            # Bytes 0-1
+            row_offset=0x24,  # Always 0x24, identifies this as track row
+            # Bytes 2-3 (will be set in marshal_binary based on row_index)
+            index_shift=0,
+            # Bytes 4-7
+            bitmask=0xC0700,  # CRITICAL VALUE from REX
+            # Bytes 8-11
+            sample_rate=sample_rate,
+            # Bytes 12-15
+            composer_id=0,
+            # Bytes 16-19
+            file_size=file_size,
+            # Bytes 20-23 (checksum - TODO: implement proper algorithm)
+            checksum=0,
+            # Bytes 24-25
+            unnamed7=0x758a,  # From REX reference value
+            # Bytes 26-27
+            unnamed8=0x57a2,  # From REX reference value
+            # Bytes 28-31
+            artwork_id=getattr(track, 'artwork_id', 0),
+            # Bytes 32-35
+            key_id=key_id,
+            # Bytes 36-39
+            original_artist_id=0,
+            # Bytes 40-43
+            label_id=getattr(track, 'label_id', 0),
+            # Bytes 44-47
+            remixer_id=0,
+            # Bytes 48-51
+            bitrate=bitrate,
+            # Bytes 52-55
+            track_number=track_number,
+            # Bytes 56-59
+            tempo=tempo,
+            # Bytes 60-63
+            genre_id=genre_id,
+            # Bytes 64-67
+            album_id=album_id,
+            # Bytes 68-71
+            artist_id=artist_id,
+            # Bytes 72-75
+            id=track_id,
+            # Bytes 76-77
+            disc_number=disc_number,
+            # Bytes 78-79
+            play_count=getattr(track, 'play_count', 0),
+            # Bytes 80-81
+            year=year,
+            # Bytes 82-83
+            sample_depth=16,  # Default to 16-bit
+            # Bytes 84-85
+            duration=duration_sec,
+            # Bytes 86-87
+            unnamed26=0x29,  # CRITICAL: From REX
+            # Bytes 88
+            color_id=color_id,
+            # Bytes 89
+            rating=getattr(track, 'rating', 0),
+            # Bytes 90-91
+            file_type=0,
+            # Bytes 92-93
+            unnamed30=0x3,  # CRITICAL: REKORBOX CRASHES WITHOUT THIS!
         )
+
         self.offsets = TrackStringOffsets()
         self.strings: Dict[str, str] = {}
 
@@ -182,159 +290,113 @@ class TrackRow:
         self.strings['file_path'] = str(file_path)
 
     def marshal_binary(self, row_index: int) -> bytes:
-        """Serialize track row with string heap.
+        """Serialize track row with string heap using REX layout.
 
         Args:
-            row_index: Row index (used to set index_shift field)
+            row_index: Row index (used to calculate index_shift)
 
         Returns:
             Complete serialized row bytes
         """
-        # Set index shift (critical field!)
-        self.header.index_shift = row_index * 0x20
-
         # Build row data
         row = bytearray()
 
-        # Fixed header (88 bytes - need to verify this count)
-        # Field packing for first 16 bytes
-        row += struct.pack('<HH', self.header.unnamed0, self.header.index_shift)  # 4 bytes
-        row += struct.pack('<II', self.header.bitmask, self.header.sample_rate)  # 8 bytes
+        # Fixed header (94 bytes) - matching REX structure exactly
+        # Bytes 0-1: row_offset (subtype)
+        row += struct.pack('<H', self.header.row_offset)
 
-        # Bytes 12-19
-        row += struct.pack('<II',
-            self.header.composer_id, self.header.file_size)  # 8 bytes
+        # Bytes 2-3: index_shift
+        self.header.index_shift = row_index * 0x20
+        row += struct.pack('<H', self.header.index_shift)
 
-        # Bytes 20-27
-        row += struct.pack('<IHH',
-            self.header.checksum, self.header.unnamed7, self.header.unnamed8)  # 8 bytes
+        # Bytes 4-7: bitmask
+        row += struct.pack('<I', self.header.bitmask)
 
-        # Bytes 28-35
-        row += struct.pack('<II',
-            self.header.artwork_id, self.header.key_id)  # 8 bytes
+        # Bytes 8-11: sample_rate
+        row += struct.pack('<I', self.header.sample_rate)
 
-        # Bytes 36-43
-        row += struct.pack('<II',
-            self.header.original_artist_id, self.header.label_id)  # 8 bytes
+        # Bytes 12-15: composer_id
+        row += struct.pack('<I', self.header.composer_id)
 
-        # Bytes 44-51
-        row += struct.pack('<II',
-            self.header.remixer_id, self.header.bitrate)  # 8 bytes
+        # Bytes 16-19: file_size
+        row += struct.pack('<I', self.header.file_size)
 
-        # Bytes 52-59
-        row += struct.pack('<II',
-            self.header.track_number, self.header.tempo)  # 8 bytes
+        # Bytes 20-23: checksum
+        row += struct.pack('<I', self.header.checksum)
 
-        # Bytes 60-67
-        row += struct.pack('<II',
-            self.header.genre_id, self.header.album_id)  # 8 bytes
+        # Bytes 24-25: unnamed7
+        row += struct.pack('<H', self.header.unnamed7)
 
-        # Bytes 68-75
-        row += struct.pack('<II',
-            self.header.artist_id, self.header.id)  # 8 bytes
+        # Bytes 26-27: unnamed8
+        row += struct.pack('<H', self.header.unnamed8)
 
-        # Bytes 76-83
-        row += struct.pack('<HHHH',
-            self.header.disc_number, self.header.play_count,
-            self.header.year, self.header.sample_depth)  # 8 bytes
+        # Bytes 28-31: artwork_id
+        row += struct.pack('<I', self.header.artwork_id)
 
-        # Bytes 84-87
-        row += struct.pack('<HH', self.header.duration, self.header.unnamed26)  # 4 bytes
+        # Bytes 32-35: key_id
+        row += struct.pack('<I', self.header.key_id)
 
-        # Bytes 88-91 (color_id, rating, file_type, unnamed30)
-        # Actually this needs to be 1 byte + 1 byte + 2 bytes
-        row += struct.pack('<BBH',
-            self.header.color_id, self.header.rating, 0x3)  # 4 bytes
+        # Bytes 36-39: original_artist_id
+        row += struct.pack('<I', self.header.original_artist_id)
 
-        # Wait, I need to recalculate. Let me be more careful:
-        # Total header should be 90 bytes (or 88? need to verify)
-        # Let me just pack the entire thing systematically
+        # Bytes 40-43: label_id
+        row += struct.pack('<I', self.header.label_id)
 
-        # Actually, looking at the structure more carefully, the track header is:
-        # - unnamed0: H (2)
-        # - index_shift: H (2)
-        # - bitmask: I (4)
-        # - sample_rate: I (4)
-        # - composer_id: I (4)
-        # - file_size: I (4)
-        # - checksum: I (4)
-        # - unnamed7: H (2)
-        # - unnamed8: H (2)
-        # - artwork_id: I (4)
-        # - key_id: I (4)
-        # - original_artist_id: I (4)
-        # - label_id: I (4)
-        # - remixer_id: I (4)
-        # - bitrate: I (4)
-        # - track_number: I (4)
-        # - tempo: I (4)
-        # - genre_id: I (4)
-        # - album_id: I (4)
-        # - artist_id: I (4)
-        # - id: I (4)
-        # - disc_number: H (2)
-        # - play_count: H (2)
-        # - year: H (2)
-        # - sample_depth: H (2)
-        # - duration: H (2)
-        # - unnamed26: H (2)
-        # - color_id: B (1)
-        # - rating: B (1)
-        # - file_type: H (2)
-        # Total: 2+2+4+4+4+4+4+2+2+4+4+4+4+4+4+4+4+4+4+4+2+2+2+2+2+2+1+1+2 = 88 bytes
+        # Bytes 44-47: remixer_id
+        row += struct.pack('<I', self.header.remixer_id)
 
-        # Then we have 42 bytes of offsets (21 × H)
-        # Total so far: 88 + 42 = 130 bytes
+        # Bytes 48-51: bitrate
+        row += struct.pack('<I', self.header.bitrate)
 
-        # But the plan says 132 bytes... let me check if there's something else
-        # Actually the file_type and unnamed30 might be in a different position
-        # Let me stick with the plan's structure which says 90 bytes for header
-        # and has file_type and unnamed30 as the last fields
+        # Bytes 52-55: track_number
+        row += struct.pack('<I', self.header.track_number)
 
-        # For now, let me rebuild with the correct 90-byte header:
-        row = bytearray()
+        # Bytes 56-59: tempo
+        row += struct.pack('<I', self.header.tempo)
 
-        # Pack all header fields in order
-        row += struct.pack('<H', self.header.unnamed0)  # 0-1
-        row += struct.pack('<H', self.header.index_shift)  # 2-3
-        row += struct.pack('<I', self.header.bitmask)  # 4-7
-        row += struct.pack('<I', self.header.sample_rate)  # 8-11
-        row += struct.pack('<I', self.header.composer_id)  # 12-15
-        row += struct.pack('<I', self.header.file_size)  # 16-19
-        row += struct.pack('<I', self.header.checksum)  # 20-23
-        row += struct.pack('<H', self.header.unnamed7)  # 24-25
-        row += struct.pack('<H', self.header.unnamed8)  # 26-27
-        row += struct.pack('<I', self.header.artwork_id)  # 28-31
-        row += struct.pack('<I', self.header.key_id)  # 32-35
-        row += struct.pack('<I', self.header.original_artist_id)  # 36-39
-        row += struct.pack('<I', self.header.label_id)  # 40-43
-        row += struct.pack('<I', self.header.remixer_id)  # 44-47
-        row += struct.pack('<I', self.header.bitrate)  # 48-51
-        row += struct.pack('<I', self.header.track_number)  # 52-55
-        row += struct.pack('<I', self.header.tempo)  # 56-59
-        row += struct.pack('<I', self.header.genre_id)  # 60-63
-        row += struct.pack('<I', self.header.album_id)  # 64-67
-        row += struct.pack('<I', self.header.artist_id)  # 68-71
-        row += struct.pack('<I', self.header.id)  # 72-75
-        row += struct.pack('<H', self.header.disc_number)  # 76-77
-        row += struct.pack('<H', self.header.play_count)  # 78-79
-        row += struct.pack('<H', self.header.year)  # 80-81
-        row += struct.pack('<H', self.header.sample_depth)  # 82-83
-        row += struct.pack('<H', self.header.duration)  # 84-85
-        row += struct.pack('<H', self.header.unnamed26)  # 86-87
-        row += struct.pack('<B', self.header.color_id)  # 88
-        row += struct.pack('<B', self.header.rating)  # 89
-        row += struct.pack('<H', 0x3)  # 90-91 - CRITICAL: file_type + unnamed30 combined
+        # Bytes 60-63: genre_id
+        row += struct.pack('<I', self.header.genre_id)
 
-        # Actually that's 92 bytes, not 90. Let me check the plan again...
-        # The plan says:
-        # - file_type: uint16 = 0x1  # MP3 = 0x1
-        # - unnamed30: uint16 = 0x3  # CRITICAL: MUST be 0x3 or rekordbox crashes!
-        #
-        # But looking at the TrackHeader definition, it seems like they're separate
-        # For now let me assume the header is 92 bytes and see if it works
+        # Bytes 64-67: album_id
+        row += struct.pack('<I', self.header.album_id)
 
-        # String offsets placeholder (42 bytes)
+        # Bytes 68-71: artist_id
+        row += struct.pack('<I', self.header.artist_id)
+
+        # Bytes 72-75: id (track_id)
+        row += struct.pack('<I', self.header.id)
+
+        # Bytes 76-77: disc_number
+        row += struct.pack('<H', self.header.disc_number)
+
+        # Bytes 78-79: play_count
+        row += struct.pack('<H', self.header.play_count)
+
+        # Bytes 80-81: year
+        row += struct.pack('<H', self.header.year)
+
+        # Bytes 82-83: sample_depth
+        row += struct.pack('<H', self.header.sample_depth)
+
+        # Bytes 84-85: duration
+        row += struct.pack('<H', self.header.duration)
+
+        # Bytes 86-87: unnamed26
+        row += struct.pack('<H', self.header.unnamed26)
+
+        # Bytes 88: color_id
+        row += struct.pack('<B', self.header.color_id)
+
+        # Bytes 89: rating
+        row += struct.pack('<B', self.header.rating)
+
+        # Bytes 90-91: file_type
+        row += struct.pack('<H', self.header.file_type)
+
+        # Bytes 92-93: unnamed30 (CRITICAL!)
+        row += struct.pack('<H', self.header.unnamed30)
+
+        # String offset table placeholder (42 bytes = 21 × uint16)
         offset_start = len(row)
         row += b'\x00' * 42
 

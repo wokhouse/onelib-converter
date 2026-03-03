@@ -9,11 +9,11 @@ from dataclasses import dataclass, field
 
 # Try to import pyrekordbox
 try:
-    from pyrekordbox.devicelib_plus import DeviceLibraryPlus
+    from pyrekordbox.db6.database import Rekordbox6Database
     PYREKORDBOX_AVAILABLE = True
 except ImportError:
     PYREKORDBOX_AVAILABLE = False
-    DeviceLibraryPlus = None
+    Rekordbox6Database = None
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,28 @@ class Track:
     beat_grid: Optional[List[float]] = None
     artwork_id: Optional[int] = None
 
+    # Metadata IDs (assigned by MetadataExtractor)
+    # These are set after metadata extraction
+    artist_id: int = 0
+    album_id: int = 0
+    genre_id: int = 0
+    label_id: int = 0
+    key_id: int = 0
+
+    # Additional metadata fields
+    track_number: int = 0
+    disc_number: int = 0
+    year: int = 0
+    label: str = ''
+    key: str = ''
+    comment: str = ''
+    composer: str = ''
+    isrc: str = ''
+    date_added: str = ''
+    release_date: str = ''
+    rating: int = 0
+    play_count: int = 0
+
     def has_analysis(self) -> bool:
         """Check if track has analysis data (waveforms, beat grid)."""
         return self.beat_grid is not None and len(self.beat_grid) > 0
@@ -59,7 +81,7 @@ class OneLibraryParser:
     """
     Parser for OneLibrary export format (Device Library Plus).
 
-    Uses pyrekordbox's DeviceLibraryPlus class to read the encrypted exportLibrary.db file.
+    Uses pyrekordbox's Rekordbox6Database class to read the encrypted exportLibrary.db file.
     """
 
     def __init__(self, db_path: str | Path):
@@ -77,7 +99,7 @@ class OneLibraryParser:
                 "Install it with: pip install pyrekordbox"
             )
 
-        self.db: Optional[DeviceLibraryPlus] = None
+        self.db: Optional[Rekordbox6Database] = None
         self.tracks: Dict[int, Track] = {}
         self.playlists: Dict[int, Playlist] = {}
 
@@ -89,8 +111,9 @@ class OneLibraryParser:
         """
         logger.info(f"Parsing OneLibrary database: {self.db_path}")
 
-        # Open database using DeviceLibraryPlus (handles exportLibrary.db)
-        self.db = DeviceLibraryPlus(self.db_path)
+        # Open database using Rekordbox6Database (handles exportLibrary.db)
+        # Note: OneLibrary databases from djay Pro don't require unlock
+        self.db = Rekordbox6Database(self.db_path, unlock=False)
 
         # Load tracks
         self._load_tracks()
@@ -107,6 +130,10 @@ class OneLibraryParser:
         """Load all tracks from the database."""
         # Use pyrekordbox's get_content method
         for content in self.db.get_content():
+            # Extract key name from Key object if available
+            key_obj = getattr(content, 'key', None)
+            key_name = key_obj.name if key_obj and hasattr(key_obj, 'name') else ''
+
             track = Track(
                 id=content.content_id,
                 title=content.title or "",
@@ -114,13 +141,32 @@ class OneLibraryParser:
                 album=content.album_name or "",
                 genre=content.genre_name or "",
                 bpm=(content.bpmx100 / 100) if content.bpmx100 else 0.0,
-                duration=(content.length / 1000) if content.length else 0.0,  # Convert ms to seconds
+                duration=float(content.length) if content.length else 0.0,  # Already in seconds
                 file_path=Path(content.path) if content.path else Path(),
                 file_size=content.fileSize or 0,
                 bit_rate=content.bitrate or 0,
                 sample_rate=content.samplingRate or 0,
-                artwork_id=None  # image_path is a string, not an ID
+                artwork_id=content.image_id if hasattr(content, 'image_id') else None,
+                # Additional metadata
+                track_number=content.trackNo if content.trackNo else 0,
+                disc_number=content.discNo if content.discNo else 0,
+                year=getattr(content, 'releaseYear', 0) or 0,
+                label=getattr(content, 'label_name', '') or '',
+                key=key_name,
+                comment=content.djComment or '',
+                composer=content.composer_name or '',
+                isrc=content.isrc or '',
+                date_added=str(content.dateAdded) if content.dateAdded else '',
+                release_date=str(content.releaseDate) if content.releaseDate else '',
+                rating=content.rating if hasattr(content, 'rating') else 0,
+                play_count=0  # Not available in Rekordbox6Database
             )
+
+            # Set composer_id and key_id after initialization (they're class fields)
+            if hasattr(content, 'artist_id_composer') and content.artist_id_composer:
+                track.composer_id = content.artist_id_composer
+            if hasattr(content, 'key_id') and content.key_id:
+                track.key_id = content.key_id
 
             self.tracks[track.id] = track
 
