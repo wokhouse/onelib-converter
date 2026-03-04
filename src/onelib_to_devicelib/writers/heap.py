@@ -14,16 +14,19 @@ class TwoWayHeap:
     - Middle: Padding fills the gap
     """
 
-    def __init__(self, page_size: int = 4096, data_header_size: int = 48):
+    def __init__(self, page_size: int = 4096, data_header_size: int = 40):
         """Initialize two-way heap.
 
         Args:
             page_size: Total page size in bytes (default 4096)
-            data_header_size: Size of page header to reserve (40 for page header + 8 for data header)
+            data_header_size: Size of page header to reserve (40 for page + data headers)
         """
         self.page_size = page_size
         self.data_header_size = data_header_size
-        self.heap_size = page_size - data_header_size
+        # Reserve space for 8-byte data header prefix in the heap
+        # The heap will output: [8-byte prefix][row data][padding][row index]
+        # So we need to reduce heap_size by 8 bytes
+        self.heap_size = page_size - data_header_size - 8
         self.top_cursor = 0
         self.bottom_cursor = self.heap_size
         self.top_data = bytearray()
@@ -91,10 +94,17 @@ class TwoWayHeap:
         """Combine top and bottom into final page heap.
 
         Returns:
-            Complete heap bytes with padding in the middle
+            Complete heap bytes with:
+            - Reserved space at start (8 bytes for data header)
+            - Top data (row data)
+            - Padding in the middle
+            - Bottom data (row index)
         """
+        # Reserve 8 bytes at the start for the data header
+        # The page + data headers (40 bytes) are written separately in DataPage.marshal_binary()
+        data_header_space = b'\x00' * 8
         padding = self.bottom_cursor - self.top_cursor
-        return bytes(self.top_data + (b'\x00' * padding) + self.bottom_data)
+        return bytes(data_header_space + self.top_data + (b'\x00' * padding) + self.bottom_data)
 
     def __repr__(self) -> str:
         """String representation of heap state."""

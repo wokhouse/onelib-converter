@@ -10,6 +10,25 @@ from dataclasses import dataclass
 from .dstring import encode_device_sql_string
 
 
+def encode_pdb_string(s: str) -> bytes:
+    """
+    Encode string for PDB format (for COLORS, HISTORY tables).
+
+    Format: [length_marker][ascii_string][padding]
+    length_marker = strlen(s) * 2 + 3
+
+    Args:
+        s: String to encode (ASCII only)
+
+    Returns:
+        Encoded bytes
+    """
+    name_bytes = s.encode('ascii')
+    length_marker = len(name_bytes) * 2 + 3
+    padding_len = length_marker - len(name_bytes) - 1
+    return bytes([length_marker]) + name_bytes + b'\x00' * padding_len
+
+
 @dataclass
 class GenreRow:
     """Genre table row (Table 1).
@@ -159,31 +178,37 @@ class KeyRow:
 class ColorRow:
     """Color table row (Table 6).
 
-    Structure:
-    - row_offset (2 bytes): Always 0x12
-    - index_shift (2 bytes): Row index shifted by 0x20
-    - color_id (4 bytes): Color ID
-    - color_rgb (4 bytes): RGB color value
-    - unknown (4 bytes): Unknown field
-    - name (DeviceSQL string): Color name
+    CORRECTED STRUCTURE (from binary analysis):
+    - length_marker (1 byte): strlen(name) * 2 + 3
+    - name (N bytes): ASCII string (NOT null-terminated)
+    - padding (P bytes): Pads to length_marker total
+    - color_id (1 byte): Color ID
+    - color_id_dup (1 byte): Duplicate color_id
+    - zero_padding (2 bytes): Always 0x0000
+
+    Total row size = 1 + length_marker + 4 bytes
     """
 
     color_id: int
     name: str
-    color_rgb: int = 0
+    color_rgb: int = 0  # Not stored in actual row structure!
 
     def marshal_binary(self, row_index: int) -> bytes:
-        """Marshal row to binary format."""
-        name_encoded = encode_device_sql_string(self.name)
-
-        # Build row: [row_offset (2)] [index_shift (2)] [color_id (4)] [color_rgb (4)] [unknown (4)] [name]
+        """Marshal row to binary format (CORRECTED)."""
         row = bytearray()
-        row.extend(struct.pack('<H', 0x12))  # row_offset
-        row.extend(struct.pack('<H', row_index & 0xFFFF))  # index_shift
-        row.extend(struct.pack('<I', self.color_id))  # color_id
-        row.extend(struct.pack('<I', self.color_rgb))  # color_rgb
-        row.extend(struct.pack('<I', 0))  # unknown
-        row.extend(name_encoded)
+
+        # String field: [length_marker][name][padding]
+        name_bytes = self.name.encode('ascii')
+        length_marker = len(name_bytes) * 2 + 3
+        padding_len = length_marker - len(name_bytes) - 1
+        row.extend(bytes([length_marker]))
+        row.extend(name_bytes)
+        row.extend(b'\x00' * padding_len)
+
+        # ID field: [id][id_dup][00 00]
+        row.extend(struct.pack('<B', self.color_id))
+        row.extend(struct.pack('<B', self.color_id))
+        row.extend(struct.pack('<H', 0))
 
         return bytes(row)
 
@@ -273,5 +298,150 @@ class PlaylistEntryRow:
         row.extend(struct.pack('<I', self.sequence_no))  # sequence_no
         row.extend(struct.pack('<I', 0))  # unknown
         row.extend(struct.pack('<I', 0))  # unknown2
+
+        return bytes(row)
+
+
+# ============================================================================
+# DEFAULT METADATA ROW TYPES (from binary analysis)
+# ============================================================================
+
+@dataclass
+class ColumnRow:
+    """Column table row (Table 16 - COLUMNS).
+
+    Structure from binary analysis:
+    - start_marker (2 bytes): 0xFFFA
+    - name (N*2 bytes): UTF-16LE encoded column name
+    - end_marker (2 bytes): 0xFFFB
+    - column_id (2 bytes): Sequential ID (2, 3, 4...)
+    - field_type (2 bytes): Field type code (0x81, 0x82...)
+    - size_type (2 bytes): Data size/type indicator
+    - padding (2 bytes): Always 0x0000
+
+    Row size = 12 + (name_length * 2) bytes
+    """
+
+    column_id: int
+    name: str
+    field_type: int
+    size_type: int
+
+    def marshal_binary(self, row_index: int) -> bytes:
+        """Marshal row to binary format."""
+        row = bytearray()
+
+        # Start marker
+        row.extend(struct.pack('<H', 0xFFFA))
+
+        # Name in UTF-16LE
+        name_utf16 = self.name.encode('utf-16-le')
+        row.extend(name_utf16)
+
+        # End marker
+        row.extend(struct.pack('<H', 0xFFFB))
+
+        # Metadata
+        row.extend(struct.pack('<H', self.column_id))
+        row.extend(struct.pack('<H', self.field_type))
+        row.extend(struct.pack('<H', self.size_type))
+        row.extend(struct.pack('<H', 0))
+
+        return bytes(row)
+
+
+@dataclass
+class Unknown17Row:
+    """UNKNOWN17 table row (Table 17).
+
+    Structure from binary analysis:
+    - field1 (2 bytes): uint16 - source_id / from_id
+    - field2 (2 bytes): uint16 - target_id / to_id
+    - field3 (4 bytes): uint32 - mapping value / flags
+
+    Fixed row size = 8 bytes
+    """
+
+    field1: int
+    field2: int
+    field3: int
+
+    def marshal_binary(self, row_index: int) -> bytes:
+        """Marshal row to binary format."""
+        row = bytearray()
+        row.extend(struct.pack('<H', self.field1))
+        row.extend(struct.pack('<H', self.field2))
+        row.extend(struct.pack('<I', self.field3))
+        return bytes(row)
+
+
+@dataclass
+class Unknown18Row:
+    """UNKNOWN18 table row (Table 18).
+
+    Structure from binary analysis (IDENTICAL to UNKNOWN17):
+    - field1 (2 bytes): uint16 - source_id / from_id
+    - field2 (2 bytes): uint16 - target_id / to_id
+    - field3 (4 bytes): uint32 - mapping value / flags
+
+    Fixed row size = 8 bytes
+    """
+
+    field1: int
+    field2: int
+    field3: int
+
+    def marshal_binary(self, row_index: int) -> bytes:
+        """Marshal row to binary format (same as Unknown17Row)."""
+        row = bytearray()
+        row.extend(struct.pack('<H', self.field1))
+        row.extend(struct.pack('<H', self.field2))
+        row.extend(struct.pack('<I', self.field3))
+        return bytes(row)
+
+
+@dataclass
+class HistoryRow:
+    """HISTORY table row (Table 19/40 - Page 40).
+
+    Structure from binary analysis:
+    - header (4 bytes): Always 0x00000000
+    - date_length_marker (1 byte): strlen(date) * 2 + 3
+    - date (N bytes): ASCII date string (e.g., "2026-03-02")
+    - padding (P bytes): Pads to length_marker total
+    - unknown1 (1 byte): Observed 0x19 (25)
+    - unknown2 (1 byte): Observed 0x1e (30)
+    - name_length_marker (1 byte): strlen(name) * 2 + 3
+    - name (M bytes): ASCII name string (e.g., "1000")
+    - padding (Q bytes): Pads to length_marker total
+    - unknown3 (1 byte): Observed 0x03 (3)
+    - padding (rest): Null bytes to fill page
+    """
+
+    date: str
+    name: str
+    unknown1: int = 0x19
+    unknown2: int = 0x1e
+    unknown3: int = 0x03
+
+    def marshal_binary(self, row_index: int) -> bytes:
+        """Marshal row to binary format."""
+        row = bytearray()
+
+        # Header (4 zero bytes)
+        row.extend(b'\x00' * 4)
+
+        # Date field
+        row.extend(encode_pdb_string(self.date))
+
+        # Unknown bytes
+        row.extend(struct.pack('<B', self.unknown1))
+        row.extend(struct.pack('<B', self.unknown2))
+
+        # Name field
+        row.extend(encode_pdb_string(self.name))
+
+        # Final unknown byte
+        row.extend(struct.pack('<B', self.unknown3))
 
         return bytes(row)

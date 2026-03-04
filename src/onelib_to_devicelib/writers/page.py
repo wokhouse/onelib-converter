@@ -98,14 +98,19 @@ class PageHeader:
 
 @dataclass
 class DataPageHeader:
-    """8-byte data page header.
+    """16-byte data page header.
 
     Comes after the 32-byte page header.
+    Structure: 8 x uint16 fields
     """
-    unknown5: int = 1
-    num_rows_large: int = 0
+    unknown5: int = 0
     unknown6: int = 0
     unknown7: int = 0
+    unknown8: int = 0
+    unknown9: int = 0
+    num_rows_large: int = 0
+    unknown10: int = 0
+    unknown11: int = 0
 
 
 @dataclass
@@ -143,16 +148,22 @@ class IndexPage:
     structure where the index page is the root.
     """
 
-    def __init__(self, page_index: int, page_type: int):
+    def __init__(self, page_index: int, page_type: int, index_next_page: int = 0x03ffffff):
         """Initialize a new index page.
 
         Args:
             page_index: Page index in the file
             page_type: Page type (PageType enum)
+            index_next_page: Next page for index_header (default 0x03ffffff for single-page tables)
         """
         self.header = PageHeader(page_index=page_index, page_type=page_type)
         self.header.page_flags = 0x64  # CRITICAL: Index page flag (FIX #2)
         self.index_header = IndexHeader()
+        # CRITICAL: Set index_header.page_index to match the page
+        self.index_header.page_index = page_index
+        # CRITICAL: Set index_header.next_page (points to next data page)
+        # Default is 0x03ffffff for single-page tables, but multi-page tables use actual page number
+        self.index_header.next_page = index_next_page
         # Index entries point to data pages
         self.index_entries: List[int] = []
 
@@ -199,15 +210,19 @@ class IndexPage:
 
         # Fill remaining space with 0x1ffffff8 (empty index marker)
         # FIX #2: Empty index entries are marked as 0x1ffffff8
+        # Reference stops at offset 4075 (leaving 20 bytes of zeros at end)
+        # This gives 1004 entries of 4 bytes each = 4016 bytes
+        # Header is 60 bytes, so entries from byte 60 to 4075
+        max_entry_offset = 4076  # Stop before this byte
         entries_written = 0
-        while len(page) < 4096 - 4:
+        while len(page) < max_entry_offset:
             if entries_written < len(self.index_entries):
                 page += struct.pack('<I', self.index_entries[entries_written])
             else:
                 page += struct.pack('<I', 0x1ffffff8)  # Empty entry
             entries_written += 1
 
-        # Pad to 4096 bytes
+        # Pad to 4096 bytes (leave remaining bytes as zeros)
         page += b'\x00' * (4096 - len(page))
 
         return bytes(page)
@@ -240,7 +255,9 @@ class DataPage:
         """
         self.header = PageHeader(page_index=page_index, page_type=page_type)
         self.data_header = DataPageHeader()
-        self.heap = TwoWayHeap(page_size=4096, data_header_size=40)  # 32-byte header + 8-byte data header
+        # Reserve 40 bytes for page + data headers, plus 8 bytes of space for data header
+        # This ensures heap data starts at byte 48 (40 headers + 8 data header space)
+        self.heap = TwoWayHeap(page_size=4096, data_header_size=48)  # 32-byte header + 16-byte data header
         self.rowsets: List[RowSet] = []
 
     def insert_row(self, row_data: bytes) -> int:
@@ -327,10 +344,12 @@ class DataPage:
         page += struct.pack('<HH',
             self.header.free_size, self.header.next_heap_write_offset)
 
-        # 8-byte data header
-        page += struct.pack('<HHHH',
-            self.data_header.unknown5, self.data_header.num_rows_large,
-            self.data_header.unknown6, self.data_header.unknown7)
+        # 16-byte data header (8 x uint16)
+        page += struct.pack('<HHHHHHHH',
+            self.data_header.unknown5, self.data_header.unknown6,
+            self.data_header.unknown7, self.data_header.unknown8,
+            self.data_header.unknown9, self.data_header.num_rows_large,
+            self.data_header.unknown10, self.data_header.unknown11)
 
         # Add heap data
         page += self.heap.to_bytes()
