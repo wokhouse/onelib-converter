@@ -58,14 +58,22 @@ class PDBWriterV3:
         self.output_dir = output_dir
         self.pages: Dict[str, List[DataPage]] = {}
         self.table_pointers: Dict[str, Dict] = {}
-        self.sequence_number = 6  # Sequence number for file header (matches empty reference)
+        self.sequence_number = 22  # Sequence number for file header (matches 4-track reference)
         self._all_pages: List[tuple] = []  # Ordered list of (page_index, table_type, page)
         self._has_data = False  # Track whether any data has been added (tracks, playlists, etc.)
+
+        # CRITICAL: Create all placeholder pages BEFORE any data is added
+        # This ensures tables have correct page_index values from the start
+        self._ensure_all_tables_exist()
 
     def add_track(self, track) -> int:
         """Add track to Tracks table.
 
-        FIX #2: First page of each table is now an index page.
+        FIX #2: First page of Tracks table is now an index page (like all other tables).
+
+        Reference structure:
+        - Page 1: IndexPage (flags=0x64, 0 rows, index entries point to data pages)
+        - Page 2+: DataPages (flags=0x34, actual track rows)
 
         Args:
             track: Parsed track from OneLibrary
@@ -75,16 +83,27 @@ class PDBWriterV3:
         """
         table_type = 'Tracks'
 
-        # NOTE: Reference doesn't use IndexPages for Tracks
-        # Create first data page if this is the first row for this table
+        # FIX #2: Create index page if this is the first row for this table
+        # This matches the pattern used by _add_metadata_row() for all other tables
         if table_type not in self.pages:
-            # Create data page (no IndexPage)
-            # Track pages start at page 1 (after file header at page 0)
-            data_page = DataPage(page_index=1, page_type=PageType.TRACKS)
-            self.pages[table_type] = [data_page]
+            # Create index page as first page (page_index will be corrected later)
+            index_page = IndexPage(page_index=0, page_type=PageType.TRACKS)
+            self.pages[table_type] = [index_page]
             self._has_data = True  # Mark that we have actual data
 
+        # Get or create data page
         pages = self.pages[table_type]
+
+        # FIX #2: If we only have index page, create first data page
+        if len(pages) == 1:
+            # First data page (page_index will be corrected to 2 later)
+            data_page = DataPage(page_index=0, page_type=PageType.TRACKS)
+            pages.append(data_page)
+            # Add this data page to index
+            index_page = pages[0]
+            index_page.add_entry(0)  # Will be corrected to page_index=2 later
+
+        # Get current page (last data page)
         current_page = pages[-1]
 
         # Create track row to check size
@@ -93,22 +112,18 @@ class PDBWriterV3:
         row_data = track_row.marshal_binary(row_index)
 
         # Estimate row size including alignment and RowSet overhead
-        # Row data + 4-byte alignment + potential RowSet (36 bytes per 16 rows)
         estimated_size = len(row_data) + 4 + (36 if (row_index % 16) == 0 else 0)
 
         # Check if page has space
-        # Need space for:
-        # - Row data (aligned to 4 bytes)
-        # - Row index grows from bottom (36 bytes per RowSet)
-        # - We need at least 100 bytes free for safety margin
         if current_page.heap.free_size() < estimated_size + 100:
             # Need new page
-            # Assign next sequential page index
-            next_page_index = len(pages) + 1  # Page 1 is first, so next is 2
-            new_page = DataPage(page_index=next_page_index, page_type=PageType.TRACKS)
+            new_page = DataPage(page_index=0, page_type=PageType.TRACKS)
             new_page.header.next_page = 0xFFFFFFFF
-            current_page.header.next_page = next_page_index
+            current_page.header.next_page = 0  # Will be corrected later
             pages.append(new_page)
+            # FIX #2: Add new data page to index
+            index_page = pages[0]
+            index_page.add_entry(0)  # Will be corrected to actual page_index later
             current_page = new_page
             # Recalculate row index for new page
             row_index = current_page.header.num_rows_small // 0x20
@@ -195,11 +210,11 @@ class PDBWriterV3:
 
         # FIX #2: If we only have index page, create first data page
         if len(pages) == 1:
-            data_page = DataPage(page_index=1, page_type=page_type)
+            data_page = DataPage(page_index=0, page_type=page_type)
             pages.append(data_page)
             # Add this data page to index
             index_page = pages[0]
-            index_page.add_entry(1)  # Point to data page 1
+            index_page.add_entry(0)  # Will be corrected to actual page_index later
 
         # Get current page
         current_page = pages[-1]
@@ -213,11 +228,11 @@ class PDBWriterV3:
             # Need new page
             new_page = DataPage(page_index=0, page_type=page_type)
             new_page.header.next_page = 0xFFFFFFFF
-            current_page.header.next_page = len(pages)
+            current_page.header.next_page = 0  # Will be corrected later
             pages.append(new_page)
             # FIX #2: Add new data page to index
             index_page = pages[0]
-            index_page.add_entry(len(pages) - 1)  # Point to new data page
+            index_page.add_entry(0)  # Will be corrected to actual page_index later
             current_page = new_page
 
         # Insert row
@@ -696,23 +711,24 @@ class PDBWriterV3:
 
         # Exact page layout from EMPTY reference file (empty_onelib_and_devicelib)
         # Format: (first_page, last_page, num_pages)
+        # Note: When tables have data, they may expand beyond this layout
         table_layout = {
-            'Tracks': (1, 1, 1),
-            'Genres': (3, 3, 1),
-            'Artists': (5, 5, 1),
-            'Albums': (7, 7, 1),
-            'Labels': (9, 9, 1),
-            'Keys': (11, 11, 1),
+            'Tracks': (1, 2, 2),  # IndexPage + DataPage when we have tracks
+            'Genres': (3, 4, 2),  # IndexPage + DataPage (or zero page if empty)
+            'Artists': (5, 6, 2),  # IndexPage + DataPage (or zero page if empty)
+            'Albums': (7, 8, 2),  # IndexPage + DataPage (or zero page if empty)
+            'Labels': (9, 10, 2),  # IndexPage + zero page
+            'Keys': (11, 12, 2),  # IndexPage + DataPage (or zero page if empty)
             'Colors': (13, 14, 2),      # 2 pages even when empty
-            'PlaylistTree': (15, 15, 1),
-            'PlaylistEntries': (17, 17, 1),
-            'Unknown9': (19, 19, 1),
-            'Unknown10': (21, 21, 1),
-            'HistoryPlaylists': (23, 23, 1),
-            'HistoryEntries': (25, 25, 1),
-            'Artwork': (27, 27, 1),
-            'Unknown14': (29, 29, 1),
-            'Unknown15': (31, 31, 1),
+            'PlaylistTree': (15, 16, 2),  # IndexPage + DataPage (or zero page if empty)
+            'PlaylistEntries': (17, 18, 2),  # IndexPage + DataPage (or zero page if empty)
+            'Unknown9': (19, 20, 2),  # IndexPage + zero page
+            'Unknown10': (21, 22, 2),  # IndexPage + zero page
+            'HistoryPlaylists': (23, 24, 2),  # IndexPage + zero page
+            'HistoryEntries': (25, 26, 2),  # IndexPage + zero page
+            'Artwork': (27, 28, 2),  # IndexPage + DataPage (or zero page if empty)
+            'Unknown14': (29, 30, 2),  # IndexPage + zero page
+            'Unknown15': (31, 32, 2),  # IndexPage + zero page
             'Columns': (33, 34, 2),     # 2 pages even when empty
             'Unknown17': (35, 36, 2),   # 2 pages even when empty
             'Unknown18': (37, 38, 2),   # 2 pages even when empty
@@ -1050,15 +1066,12 @@ class PDBWriterV3:
         # Store ordered pages for finalize() to use
         self._all_pages = ordered_pages
 
-        # Rebuild self.pages as a dict of lists (excluding gaps)
-        self.pages = {}
+        # Just update page_index in headers - don't rebuild self.pages!
+        # The self.pages dict is already correct from _ensure_all_tables_exist()
+        # and add_track()/add_playlist()/_add_metadata_row()
         for page_index, table_type, page in ordered_pages:
-            page.header.page_index = page_index  # Ensure correct index
-
-            if table_type is not None:
-                if table_type not in self.pages:
-                    self.pages[table_type] = []
-                self.pages[table_type].append(page)
+            page.header.page_index = page_index  # Ensure correct index in header
+            # NOTE: Don't touch self.pages - it's already correct!
 
     def _build_file_header(self) -> bytes:
         """Build PDB file header.
