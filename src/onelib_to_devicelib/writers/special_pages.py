@@ -171,10 +171,12 @@ class Unknown17Marshaller(SpecialPageMarshaller):
         data_header_rows = rows[:4]
         regular_rows = rows[4:]
 
-        # Build page header - IMPORTANT: For Unknown17, bitfields count only row data entries
-        # not including data header entries
+        # Build page header (bytes 0-31)
+        # IMPORTANT: num_rows should be 22 (indexed rows), even if total rows > 22
+        # We have 26 rows total (4 data header + 22 regular), but only 22 are indexed by RowSets
+        num_indexed_rows = 22  # First 22 rows are indexed by RowSets
         page_header = self._build_page_header(
-            page_index, page_type, len(regular_rows),  # Use row data count (22)
+            page_index, page_type, num_indexed_rows,
             free_size=0xef4, next_offset=0xb0,
             transaction=4, next_page=0x2c
         )

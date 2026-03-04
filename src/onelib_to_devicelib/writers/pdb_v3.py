@@ -442,64 +442,12 @@ class PDBWriterV3:
         for col_id, name, field_type, size_type in default_columns[1:]:
             self.add_column(col_id, name, field_type, size_type)
 
-        # Add default Unknown17 entries (22 entries)
-        # NOTE: First 2 entries are stored in data header
-        # Data header: (5, 6), (6, 7)
-        # Row data contains remaining 20 entries
-        default_unknown17 = [
-            (5, 6, 0x00000105),     # Skip - in data header
-            (6, 7, 0x00000163),     # Skip - in data header
-            (7, 8, 0x00000163),
-            (8, 9, 0x00000163),
-            (9, 10, 0x00000163),
-            (10, 11, 0x00000163),
-            (13, 15, 0x00000163),
-            (14, 19, 0x00000104),
-            (15, 20, 0x00000106),
-            (16, 21, 0x00000163),
-            (18, 23, 0x00000163),
-            (2, 2, 0x00010002),
-            (3, 3, 0x00020003),
-            (4, 4, 0x00010003),
-            (11, 12, 0x00000063),
-            (17, 5, 0x00000063),
-            (19, 22, 0x00000063),
-            (20, 18, 0x00000063),
-            (24, 17, 0x00000063),
-            (22, 27, 0x00000063),
-            (26, 27, 0x00000063),
-        ]
-        # Skip first 2 entries - they're in data header
-        for field1, field2, field3 in default_unknown17[2:]:
-            self.add_unknown17(field1, field2, field3)
+        # Unknown17 entries are added by _get_unknown17_rows() during marshalling
+        # Do NOT add them here - they have hardcoded values that must match the reference
+        # The marshaller will use _get_unknown17_rows() which has the correct values
 
-        # Add default Unknown18 entries (18 entries)
-        # NOTE: First 3 entries are stored in heap prefix (1 entry) and data header (2 entries)
-        # Heap prefix: (1, 6, 0x00000001)
-        # Data header: (21, 7, 0x00000001), (14, 8, 0x00000001)
-        # Row data contains remaining 15 entries
-        default_unknown18 = [
-            (1, 6, 0x00000001),     # Skip - in heap prefix
-            (21, 7, 0x00000001),    # Skip - in data header
-            (14, 8, 0x00000001),    # Skip - in data header
-            (8, 9, 0x00000001),
-            (9, 10, 0x00000001),
-            (10, 11, 0x00000001),
-            (15, 13, 0x00000001),
-            (13, 15, 0x00000001),
-            (23, 16, 0x00000001),
-            (22, 17, 0x00000001),
-            (25, 0, 0x00000100),
-            (26, 1, 0x00000200),
-            (2, 2, 0x00000300),
-            (3, 3, 0x00000400),
-            (5, 4, 0x00000500),
-            (6, 5, 0x00000600),
-            (11, 12, 0x00000700),
-        ]
-        # Skip first 3 entries - they're in heap prefix + data header
-        for field1, field2, field3 in default_unknown18[3:]:
-            self.add_unknown18(field1, field2, field3)
+        # Do NOT add them here - they have hardcoded values that must match the reference
+        # The marshaller will use _get_unknown18_rows() which has the correct values
 
         # Add default History entry (1 entry)
         # NOTE: History is handled specially via raw_page_bytes in _set_metadata_data_headers()
@@ -529,12 +477,14 @@ class PDBWriterV3:
             ColorsMarshaller, ColumnsMarshaller, HistoryMarshaller
         )
 
-        # Unknown17 (page 36): Data header contains first 2 entries
+        # Unknown17 (page 36): Data header contains first 4 entries
         if 'Unknown17' in self.pages:
             rows = self._get_unknown17_rows()
             marshaller = Unknown17Marshaller()
             for page in self.pages['Unknown17']:
                 if isinstance(page, DataPage):
+                    # Use total row count (22), not just regular_rows (18)
+                    # This matches the test which passes len(rows) = 22
                     page.raw_page_bytes = marshaller.marshal_page(
                         page.header.page_index, PageType.UNKNOWN17, rows
                     )
@@ -609,6 +559,10 @@ class PDBWriterV3:
             (20, 18, 0x00070063),
             (27, 26, 0x00080263),
             (24, 17, 0x00090063),
+            (22, 27, 0x000a0063),
+            (0, 0, 0x00000000),    # Null row
+            (0, 0, 0x00000000),    # Null row
+            (0, 0, 0x00000000),    # Null row (NOT indexed)
         ]
         for field1, field2, field3 in default_unknown17:
             rows.append(Unknown17Row(field1, field2, field3))
@@ -619,10 +573,13 @@ class PDBWriterV3:
         """Extract Unknown18 rows including heap prefix and data header entries."""
         rows = []
 
-        # First entry goes in heap prefix
+        # Heap prefix entry (bytes 32-39)
+        rows.append(Unknown18Row(17, 0, 0x00000000))
+
+        # Extra entry (bytes 40-47)
         rows.append(Unknown18Row(1, 6, 0x00000001))
 
-        # Next 2 entries go in data header
+        # Data header entries (bytes 48-63)
         rows.append(Unknown18Row(21, 7, 0x00000001))
         rows.append(Unknown18Row(14, 8, 0x00000001))
 
