@@ -25,7 +25,7 @@ def test_unknown17_page():
     """Test Unknown17 page (Page 36)."""
     print("\n=== Testing Unknown17 Page (36) ===")
 
-    # Create default rows (22 total - 4 in data header + 18 in row data)
+    # Create default rows (22 total)
     rows = []
 
     # First 4 entries go in data header (bytes 32-63)
@@ -35,6 +35,7 @@ def test_unknown17_page():
     rows.append(Unknown17Row(6, 7, 0x00000163))   # Entry at bytes 56-63
 
     # Remaining 18 entries (from binary analysis of reference)
+    # Reference has 22 regular rows (19 valid + 3 null)
     default_unknown17 = [
         (7, 8, 0x00000163),
         (8, 9, 0x00000163),
@@ -54,6 +55,10 @@ def test_unknown17_page():
         (20, 18, 0x00070063),
         (27, 26, 0x00080263),
         (24, 17, 0x00090063),
+        (22, 27, 0x000a0063),
+        (0, 0, 0x00000000),  # Row 19 - null
+        (0, 0, 0x00000000),  # Row 20 - null
+        (0, 0, 0x00000000),  # Row 21 - null
     ]
     for field1, field2, field3 in default_unknown17:
         rows.append(Unknown17Row(field1, field2, field3))
