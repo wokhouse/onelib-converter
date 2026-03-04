@@ -31,6 +31,7 @@ class TwoWayHeap:
         self.bottom_cursor = self.heap_size
         self.top_data = bytearray()
         self.bottom_data = bytearray()
+        self.heap_prefix = b'\x00' * 8  # Default to null bytes
 
     def write_top(self, data: bytes) -> int:
         """Write data to top of heap (row data).
@@ -90,21 +91,32 @@ class TwoWayHeap:
         """
         return max(0, self.bottom_cursor - self.top_cursor)
 
+    def set_prefix(self, prefix: bytes) -> None:
+        """Set the 8-byte heap prefix.
+
+        The heap prefix is stored at bytes 40-48 of the page (before the data header).
+        For some tables (Columns, Unknown18), this contains metadata for the first row.
+
+        Args:
+            prefix: Exactly 8 bytes for the heap prefix
+        """
+        if len(prefix) != 8:
+            raise ValueError(f"Heap prefix must be exactly 8 bytes, got {len(prefix)}")
+        self.heap_prefix = prefix
+
     def to_bytes(self) -> bytes:
         """Combine top and bottom into final page heap.
 
         Returns:
             Complete heap bytes with:
-            - Reserved space at start (8 bytes for data header)
+            - Heap prefix (8 bytes)
             - Top data (row data)
             - Padding in the middle
             - Bottom data (row index)
         """
-        # Reserve 8 bytes at the start for the data header
-        # The page + data headers (40 bytes) are written separately in DataPage.marshal_binary()
-        data_header_space = b'\x00' * 8
+        # Use the custom heap prefix (or default null bytes)
         padding = self.bottom_cursor - self.top_cursor
-        return bytes(data_header_space + self.top_data + (b'\x00' * padding) + self.bottom_data)
+        return bytes(self.heap_prefix + self.top_data + (b'\x00' * padding) + self.bottom_data)
 
     def __repr__(self) -> str:
         """String representation of heap state."""

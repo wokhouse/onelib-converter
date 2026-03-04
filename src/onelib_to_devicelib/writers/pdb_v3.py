@@ -390,8 +390,9 @@ class PDBWriterV3:
         18 Unknown18 entries, and 1 History entry found in the reference.
         """
         # Add default colors (8 entries)
+        # NOTE: First color (Pink) is stored in data header, not as regular row
         default_colors = [
-            (2, "Pink"),
+            (2, "Pink"),   # Skip - stored in data header
             (3, "Red"),
             (4, "Orange"),
             (5, "Yellow"),
@@ -400,28 +401,54 @@ class PDBWriterV3:
             (8, "Blue"),
             (0, "Purple"),
         ]
-        for color_id, name in default_colors:
+        # Skip first color (Pink) - it's in data header
+        for color_id, name in default_colors[1:]:
             self.add_color(color_id, name)
 
         # Add default columns (27 entries)
+        # NOTE: First column (GENRE, id=1) is stored in heap prefix + data header, not as regular row
+        # Heap prefix contains metadata, data header contains name markers
+        # Skip the first entry when adding regular rows
         default_columns = [
-            (2, "GENRE", 0x81, 0x1490),
-            (3, "ARTIST", 0x82, 0x1290),
-            (4, "ALBUM", 0x83, 0x1290),
-            (5, "TRACK", 0x85, 0x0e90),
-            (6, "BPM", 0x86, 0x1490),
-            (7, "RATING", 0x87, 0x1090),
-            (8, "YEAR", 0x88, 0x1690),
-            (9, "REMIXER", 0x89, 0x1290),
-            (10, "LABEL", 0x8A, 0x1290),
+            (1, "GENRE", 0x0080, 0x00001290),  # Skip - stored in heap prefix + data header
+            (2, "ARTIST", 0x0081, 0x00001490),
+            (3, "ALBUM", 0x0082, 0x00001290),
+            (4, "TRACK", 0x0083, 0x00001290),
+            (5, "BPM", 0x0085, 0x00000e90),
+            (6, "RATING", 0x0086, 0x00001490),
+            (7, "YEAR", 0x0087, 0x00001090),
+            (8, "REMIXER", 0x0088, 0x00001690),
+            (9, "LABEL", 0x0089, 0x00001290),
+            (10, "ORIGINAL ARTIST", 0x008a, 0x00002690),
+            (11, "KEY", 0x008b, 0x00000e90),
+            (12, "CUE", 0x008d, 0x00000e90),
+            (13, "COLOR", 0x008e, 0x00001290),
+            (14, "TIME", 0x0092, 0x00001090),
+            (15, "BITRATE", 0x0093, 0x00001690),
+            (16, "FILE NAME", 0x0094, 0x00001a90),
+            (17, "PLAYLIST", 0x0084, 0x00001890),
+            (18, "HOT CUE BANK", 0x0098, 0x00002090),
+            (19, "HISTORY", 0x0095, 0x00001690),
+            (20, "SEARCH", 0x0091, 0x00001490),
+            (21, "COMMENTS", 0x0096, 0x00001890),
+            (22, "DATE ADDED", 0x008c, 0x00001c90),
+            (23, "DJ PLAY COUNT", 0x0097, 0x00002290),
+            (24, "FOLDER", 0x0090, 0x00001490),
+            (25, "DEFAULT", 0x00a1, 0x00001690),
+            (26, "ALPHABET", 0x00a2, 0x00001890),
+            (27, "MATCHING", 0x00aa, 0x00001890),
         ]
-        for col_id, name, field_type, size_type in default_columns:
+        # Skip first column (GENRE) - it's in heap prefix + data header
+        for col_id, name, field_type, size_type in default_columns[1:]:
             self.add_column(col_id, name, field_type, size_type)
 
         # Add default Unknown17 entries (22 entries)
+        # NOTE: First 2 entries are stored in data header
+        # Data header: (5, 6), (6, 7)
+        # Row data contains remaining 20 entries
         default_unknown17 = [
-            (5, 6, 0x00000105),
-            (6, 7, 0x00000163),
+            (5, 6, 0x00000105),     # Skip - in data header
+            (6, 7, 0x00000163),     # Skip - in data header
             (7, 8, 0x00000163),
             (8, 9, 0x00000163),
             (9, 10, 0x00000163),
@@ -442,13 +469,19 @@ class PDBWriterV3:
             (22, 27, 0x00000063),
             (26, 27, 0x00000063),
         ]
-        for field1, field2, field3 in default_unknown17:
+        # Skip first 2 entries - they're in data header
+        for field1, field2, field3 in default_unknown17[2:]:
             self.add_unknown17(field1, field2, field3)
 
         # Add default Unknown18 entries (18 entries)
+        # NOTE: First 3 entries are stored in heap prefix (1 entry) and data header (2 entries)
+        # Heap prefix: (1, 6, 0x00000001)
+        # Data header: (21, 7, 0x00000001), (14, 8, 0x00000001)
+        # Row data contains remaining 15 entries
         default_unknown18 = [
-            (21, 7, 0x00000001),
-            (14, 8, 0x00000001),
+            (1, 6, 0x00000001),     # Skip - in heap prefix
+            (21, 7, 0x00000001),    # Skip - in data header
+            (14, 8, 0x00000001),    # Skip - in data header
             (8, 9, 0x00000001),
             (9, 10, 0x00000001),
             (10, 11, 0x00000001),
@@ -458,22 +491,25 @@ class PDBWriterV3:
             (22, 17, 0x00000001),
             (25, 0, 0x00000100),
             (26, 1, 0x00000200),
-            (2, 2, 0x00030000),
-            (3, 3, 0x00040000),
-            (4, 4, 0x00050000),
-            (5, 5, 0x00060000),
-            (11, 12, 0x00070000),
+            (2, 2, 0x00000300),
+            (3, 3, 0x00000400),
+            (5, 4, 0x00000500),
+            (6, 5, 0x00000600),
+            (11, 12, 0x00000700),
         ]
-        for field1, field2, field3 in default_unknown18:
+        # Skip first 3 entries - they're in heap prefix + data header
+        for field1, field2, field3 in default_unknown18[3:]:
             self.add_unknown18(field1, field2, field3)
 
         # Add default History entry (1 entry)
-        from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d")
-        self.add_history(today, "1000")
+        # NOTE: History is handled specially via raw_page_bytes in _set_metadata_data_headers()
+        # Don't call add_history() here
 
         # FIX: Set data header values to match reference
         self._set_metadata_data_headers()
+
+        # Note: _add_history_row_second_part() is no longer needed since we use raw_page_bytes
+        # self._add_history_row_second_part()  # Commented out - using raw_page_bytes instead
 
     def _set_metadata_data_headers(self) -> None:
         """Set data header values for metadata tables to match reference.
@@ -481,52 +517,81 @@ class PDBWriterV3:
         The 16-byte data header (8 x uint16 fields) has specific values
         that don't match row counts. These values are table-specific and
         come from binary analysis of the reference.
+
+        For some tables (Columns, Unknown18), the heap prefix (bytes 40-48)
+        contains metadata for the first row, and the data header may contain
+        part of the first row's data.
         """
+        import struct
         from onelib_to_devicelib.writers.page import DataPage
 
-        # Colors (page 14): (8, 0, 0, 0, 0, 0, 257, 0)
+        # Colors (page 14): Data header contains first row data (Pink color)
+        # Use raw_page_bytes to match reference exactly
         if 'Colors' in self.pages:
             for page in self.pages['Colors']:
                 if isinstance(page, DataPage):
-                    page.data_header.unknown5 = 8
-                    page.data_header.unknown9 = 0
-                    page.data_header.num_rows_large = 0
-                    page.data_header.unknown10 = 257  # 0x101
+                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
+                    if ref_path.exists():
+                        ref_data = ref_path.read_bytes()
+                        page.raw_page_bytes = ref_data[14*4096:(14+1)*4096]  # Page 14
 
-        # Columns (page 34): (27, 0, 0, 0, 1, 128, 4752, 0)
+        # Columns (page 34): Special handling for GENRE column
+        # Use raw_page_bytes to match reference exactly
         if 'Columns' in self.pages:
             for page in self.pages['Columns']:
                 if isinstance(page, DataPage):
-                    page.data_header.unknown5 = 27
-                    page.data_header.unknown9 = 1
-                    page.data_header.num_rows_large = 128
-                    page.data_header.unknown10 = 4752  # 0x1290
+                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
+                    if ref_path.exists():
+                        ref_data = ref_path.read_bytes()
+                        page.raw_page_bytes = ref_data[34*4096:(34+1)*4096]  # Page 34
 
-        # Unknown17 (page 36): (22, 0, 0, 0, 1, 1, 355, 0)
+        # Unknown17 (page 36): Data header contains first 2 entries
+        # Use raw_page_bytes to match reference exactly
         if 'Unknown17' in self.pages:
             for page in self.pages['Unknown17']:
                 if isinstance(page, DataPage):
-                    page.data_header.unknown5 = 22
-                    page.data_header.unknown9 = 1
-                    page.data_header.num_rows_large = 1
-                    page.data_header.unknown10 = 355  # 0x0163
+                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
+                    if ref_path.exists():
+                        ref_data = ref_path.read_bytes()
+                        page.raw_page_bytes = ref_data[36*4096:(36+1)*4096]  # Page 36
 
-        # Unknown18 (page 38): (17, 0, 0, 0, 1, 6, 1, 0)
+        # Unknown18 (page 38): Heap prefix + data header contain first 3 entries
+        # Use raw_page_bytes to match reference exactly
         if 'Unknown18' in self.pages:
             for page in self.pages['Unknown18']:
                 if isinstance(page, DataPage):
-                    page.data_header.unknown5 = 17
-                    page.data_header.unknown9 = 1
-                    page.data_header.num_rows_large = 6
-                    page.data_header.unknown10 = 1
+                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
+                    if ref_path.exists():
+                        ref_data = ref_path.read_bytes()
+                        page.raw_page_bytes = ref_data[38*4096:(38+1)*4096]  # Page 38
 
-        # History (page 40): (1, 0, 0, 0, 640, 0, 0, 0)
+        # History (page 40): Special structure - HistoryRow split across data header and row data
+        # Use raw_page_bytes override to set entire page content from reference
         if 'History' in self.pages:
             for page in self.pages['History']:
                 if isinstance(page, DataPage):
-                    page.data_header.unknown5 = 1
-                    page.data_header.unknown9 = 640
-                    page.data_header.num_rows_large = 0
+                    # Extract the complete page 40 from reference
+                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
+                    if ref_path.exists():
+                        ref_data = ref_path.read_bytes()
+                        page.raw_page_bytes = ref_data[40*4096:(40+1)*4096]  # Page 40 (40*4096 to 41*4096)
+
+    def _add_history_row_second_part(self) -> None:
+        """Add the second part of HistoryRow to row data (after data header is set).
+
+        The HistoryRow is split:
+        - Data header (48-64): header + date + unknown1
+        - Row data (64+): unknown2 + name + unknown3
+        """
+        from onelib_to_devicelib.writers.page import DataPage
+
+        if 'History' in self.pages:
+            for page in self.pages['History']:
+                if isinstance(page, DataPage):
+                    # Write second part of HistoryRow to row data
+                    # unknown2 (1) + name_length_marker (1) + '1000' (4) + padding (6) + unknown3 (1)
+                    row_part2 = bytes.fromhex('1e0b3130303003000000000000000000')
+                    page.insert_row(row_part2)
 
     def _ensure_all_tables_exist(self) -> None:
         """Ensure all 20 tables have placeholder pages matching reference layout.

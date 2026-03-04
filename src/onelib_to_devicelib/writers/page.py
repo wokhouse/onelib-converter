@@ -111,6 +111,7 @@ class DataPageHeader:
     num_rows_large: int = 0
     unknown10: int = 0
     unknown11: int = 0
+    raw_bytes: Optional[bytes] = None  # Override for raw 16-byte data header
 
 
 @dataclass
@@ -259,6 +260,7 @@ class DataPage:
         # This ensures heap data starts at byte 48 (40 headers + 8 data header space)
         self.heap = TwoWayHeap(page_size=4096, data_header_size=48)  # 32-byte header + 16-byte data header
         self.rowsets: List[RowSet] = []
+        self.raw_page_bytes: Optional[bytes] = None  # Override for entire page content (for History, etc.)
 
     def insert_row(self, row_data: bytes) -> int:
         """Insert row and return row index.
@@ -315,6 +317,12 @@ class DataPage:
         Returns:
             4096 bytes of complete page data
         """
+        # Allow override with raw page bytes for special cases (History, etc.)
+        if self.raw_page_bytes:
+            if len(self.raw_page_bytes) != 4096:
+                raise ValueError(f"raw_page_bytes must be exactly 4096 bytes, got {len(self.raw_page_bytes)}")
+            return self.raw_page_bytes
+
         # Build row index at bottom of heap
         # Write RowSets in reverse order
         for rowset in reversed(self.rowsets):
@@ -345,11 +353,15 @@ class DataPage:
             self.header.free_size, self.header.next_heap_write_offset)
 
         # 16-byte data header (8 x uint16)
-        page += struct.pack('<HHHHHHHH',
-            self.data_header.unknown5, self.data_header.unknown6,
-            self.data_header.unknown7, self.data_header.unknown8,
-            self.data_header.unknown9, self.data_header.num_rows_large,
-            self.data_header.unknown10, self.data_header.unknown11)
+        # Allow override with raw bytes for special cases (Colors, etc.)
+        if self.data_header.raw_bytes:
+            page += self.data_header.raw_bytes
+        else:
+            page += struct.pack('<HHHHHHHH',
+                self.data_header.unknown5, self.data_header.unknown6,
+                self.data_header.unknown7, self.data_header.unknown8,
+                self.data_header.unknown9, self.data_header.num_rows_large,
+                self.data_header.unknown10, self.data_header.unknown11)
 
         # Add heap data
         page += self.heap.to_bytes()
