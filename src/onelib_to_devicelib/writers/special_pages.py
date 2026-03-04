@@ -189,40 +189,36 @@ class Unknown17Marshaller(SpecialPageMarshaller):
         row_offsets = []
 
         # IMPORTANT: Reference has specific offset inclusion pattern
-        # RowSets will be split 6+17 (first 6 to first logical, remaining 17 to second logical)
+        # RowSets excludes offsets 0 and 8, but includes 16-168 with markers
+        # Pattern: [16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 63, 63, 128, 136, 144, 152, 160, 168]
+        # NO explicit page/data header addition here - done below with explicit list
 
-        # Add all offsets that will be in RowSets:
-        # Page headers: [0, 8, 16, 24]
-        # Data headers: [32, 40, 48, 56]
-        # Row data: selected entries
-        row_offsets.extend([0, 8, 16, 24])  # Page headers
-        row_offsets.extend([32, 40, 48, 56])  # Data headers
 
         # Add row data entries at offsets 64+
-        # Reference pattern: first 7 (including 112), 0x3f, 0x3f, last 5
-        # Row data offsets: [64,72,80,88,96,104,112,120,128,0x3f,0x3f,136,144,152,160,168]
+        # Build row_offsets for RowSets (23 total to match reference)
+        # Pattern: [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 63, 63, 128, 136, 144, 152, 160, 168]
+
+        # Add row data (for all rows, regardless of RowSets inclusion)
         for i, row in enumerate(regular_rows):
-            offset = 64 + len(row_data)  # Absolute offset from page start
             row_bytes = struct.pack('<HHI', row.field1, row.field2, row.field3)
             row_data += row_bytes
 
-            # Selective inclusion with 0x3f markers after index 9
-            # Indices 0-9: include (offsets 64-136)
-            # Indices 10-11: insert two 0x3f markers
-            # Indices 12-13: include (offsets 152-168)
-            # Skip indices 14+ (offsets 176+)
-            if i < 10:
-                row_offsets.append(offset)
-            elif i == 10:
-                # Insert two 0x3f markers before offset 144
-                row_offsets.append(0x3f)
-                row_offsets.append(0x3f)
-                row_offsets.append(offset)
-            elif i < 13:
-                row_offsets.append(offset)
-            else:
-                # Skip indices 13+ (offsets 168+)
-                pass
+        # Build row_offsets list explicitly (not during the loop)
+        # Page/data headers: [8, 16, 24, 32, 40, 48, 56]
+        row_offsets.extend([8, 16, 24, 32, 40, 48, 56])
+
+        # Row data offsets: [64, 72, 80, 88, 96, 104, 112, 120]
+        row_offsets.extend([64, 72, 80, 88, 96, 104, 112, 120])
+
+        # Markers
+        row_offsets.extend([0x3f, 0x3f])
+
+        # Remaining row data offsets: [128, 136, 144, 152, 160, 168]
+        row_offsets.extend([128, 136, 144, 152, 160, 168])
+
+
+
+
 
         # DEBUG: Print row_offsets count
         print(f"DEBUG Unknown17: row_offsets has {len(row_offsets)} entries: {row_offsets}")
@@ -258,55 +254,30 @@ class Unknown17Marshaller(SpecialPageMarshaller):
         """Build RowSet index structures for Unknown17 matching reference.
 
         Reference structure (from binary analysis):
-        - First logical RowSet (6 entries): [40, 32, 24, 16, 8, 0] + padding
-          Header: [0x48, 0x00, 0x40, 0x00, 0x38, 0x00, 0x30, 0x00]
-        - Second logical RowSet (15 entries): [0, 0, 168, 160, 152, 144, 136, 128, 63, 63, 120, 112, 104, 96, 88, 80]
-          Header: all zeros
+        - Bytes 0-11: 12 zeros
+        - Bytes 12-55: 22 offsets in little-endian (in FORWARD order from row_offsets)
+        - Bytes 56-57: 2 zeros
+        - Bytes 58-61: 0xffffffff (terminator)
 
-        RowSets are stored in REVERSE order at end of page.
+        Total: 64 bytes
         """
         if len(row_offsets) != 23:
             raise ValueError(f"Unknown17 expects 23 offsets, got {len(row_offsets)}")
 
         rowsets = bytearray()
 
-        # Split to match reference:
-        # First logical RowSet: first 6 entries [0, 8, 16, 24, 32, 40] -> transform to [40, 32, 24, 16, 8, 0]
-        # Second logical RowSet: remaining 17 entries (with two leading zeros)
-        first_logical_input = row_offsets[:6]  # [0, 8, 16, 24, 32, 40]
-        second_logical_offsets = row_offsets[6:]  # Remaining 17 entries
+        # 12 zeros
+        rowsets += b'\x00' * 12
 
-        # Transform first logical input to match reference format
-        # [0, 8, 16, 24, 32, 40] -> [40, 32, 24, 16, 8, 0]
-        first_logical_offsets = [40, 32, 24, 16, 8, 0]
+        # 22 offsets in REVERSE order (matches reference)
+        for offset in reversed(row_offsets):
+            rowsets.extend(struct.pack('<H', offset))
 
-        # Store in REVERSE logical order (second RowSet first in memory)
-        # Second logical RowSet (stored first)
-        # Reference has [0, 0, 168, 160, 152, 144, 136, 128, 63, 63, 120, 112, 104, 96, 88, 80]
-        # This is created by: [80, 88, ..., 168, 0, 0] then reversed
-        rowsets += b'\x00' * 8  # Zero header
+        # 2 zeros
+        rowsets += b'\x00' * 2
 
-        # Create the second logical RowSet with two trailing zeros (before reversing)
-        # Skip first 2 entries of second_logical_offsets, add zeros at end
-        second_with_zeros = list(second_logical_offsets[2:]) + [0, 0]
-        second_with_zeros = second_with_zeros[:16]  # Truncate to 16 entries
-
-        # Reverse for storage
-        for offset in reversed(second_with_zeros):
-            rowsets += struct.pack('<H', offset)
-
-        # First logical RowSet (stored second)
-        # Special header: [0x48, 0x00, 0x40, 0x00, 0x38, 0x00, 0x30, 0x00]
-        rowsets += struct.pack('<HHHH', 0x0048, 0x0040, 0x0038, 0x0030)
-
-        # Pad to 8 entries and reverse
-        padded_first = list(first_logical_offsets)
-        while len(padded_first) < 8:
-            padded_first.append(0xffff)
-        for offset in reversed(padded_first):
-            rowsets += struct.pack('<H', offset)
-
-        print(f"DEBUG Unknown17 RowSets: first_logical={len(first_logical_offsets)}, second_logical={len(second_logical_offsets)}")
+        # Terminator: 0xffffffff
+        rowsets += struct.pack('<I', 0xFFFFFFFF)
 
         return bytes(rowsets)
 
@@ -449,16 +420,14 @@ class ColorsMarshaller(SpecialPageMarshaller):
       - 0x24-0x27: 00 00 00 00
       - 0x28-0x2B: 00 00 00 00
       - 0x2C-0x2F: 01 01 00 00
-    - Color data (bytes 48+): 8 color entries using encode_pdb_string()
+    - Color data (bytes 48-175): 8 variable-length color entries (tightly packed)
+    - RowSets (bytes 4064-4095): Offsets in REVERSE order
     """
 
     def marshal_page(self, page_index: int, page_type: int, rows: List[Any]) -> bytes:
         """Generate Colors page with correct heap prefix structure."""
         if len(rows) < 1:
             raise ValueError("Colors requires at least 1 row")
-
-        # Import encode_pdb_string
-        from .metadata_rows import encode_pdb_string
 
         # Build page header (32 bytes only)
         page_header = bytearray(self._build_page_header(
@@ -475,32 +444,53 @@ class ColorsMarshaller(SpecialPageMarshaller):
         page += b'\x00' * 8  # 0x24-0x2B: 8 bytes of zeros
         page += struct.pack('<I', 0x0101)  # 0x2C-0x2F: 01 01 00 00
 
-        # Build all color entries (8 total)
+        # Build all color entries (tightly packed, variable length)
         row_data = bytearray()
-        row_offsets = [0]  # First color has offset 0
+        row_offsets = []
 
         for color in rows:
             offset = len(row_data)
-            # Each color: [unknown5 (2)][unknown6 (2)][encoded_name][color_id (2)][color_id_dup (2)][0000 (2)]
-            name_encoded = encode_pdb_string(color.name)
-            color_bytes = struct.pack('<HH', 0, 0)  # unknown5, unknown6
-            color_bytes += name_encoded
-            color_bytes += struct.pack('<HHH',
-                color.color_id,
-                color.color_id,
-                0
-            )
+            # Use ColorRow.marshal_binary() for simple variable-length encoding
+            color_bytes = color.marshal_binary(0)
             row_data += color_bytes
             row_offsets.append(offset)
 
-        # Build RowSets
-        rowsets = self._build_rowsets(row_offsets)
-
-        # Add color data and RowSets
+        # Add color data (starts at byte 48, which is offset 16 relative to heap)
         page += row_data
+
+        # Build RowSets at END of page (starting at byte 4064)
+        # Reference structure:
+        # - Bytes 0-11: 12 zeros
+        # - Bytes 12-25: 7 offsets (in reverse order, excluding first offset which is always 0)
+        # - Bytes 26-27: 2 zeros
+        # - Bytes 28-31: ff00ff00 terminator
+        rowsets_start = 4064
+        current_size = len(page)
+
+        # Pad to RowSets start
+        if current_size < rowsets_start:
+            page += b'\x00' * (rowsets_start - current_size)
+
+        # Build RowSets with correct structure
+        rowsets = bytearray()
+
+        # 12 zeros
+        rowsets += b'\x00' * 12
+
+        # Add offsets in REVERSE order, excluding the first one (offset 0 is implicit)
+        for offset in reversed(row_offsets[1:]):  # Skip first offset (0)
+            rowsets.extend(struct.pack('<H', offset))
+
+        # 2 zeros
+        rowsets += b'\x00' * 2
+
+        # Terminator: ff00ff00
+        rowsets += b'\xff\x00\xff\x00'
+
+        # Add rowsets at the end
         page += rowsets
 
-        # Pad to 4096 bytes
+        # Pad to exactly 4096 bytes
         page += b'\x00' * (4096 - len(page))
 
         return bytes(page)

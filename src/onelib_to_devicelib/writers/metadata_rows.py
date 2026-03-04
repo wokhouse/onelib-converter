@@ -178,15 +178,16 @@ class KeyRow:
 class ColorRow:
     """Color table row (Table 6).
 
-    CORRECTED STRUCTURE (from binary analysis):
-    - length_marker (1 byte): strlen(name) * 2 + 3
-    - name (N bytes): ASCII string (NOT null-terminated)
-    - padding (P bytes): Pads to length_marker total
+    SIMPLE STRUCTURE (from reference Page 14 analysis):
+    - length_marker (1 byte): Total entry length (1 + strlen + 1 + padding + 4)
+    - name (N bytes): ASCII string + null terminator
+    - padding (P bytes): Zeros to align
     - color_id (1 byte): Color ID
     - color_id_dup (1 byte): Duplicate color_id
     - zero_padding (2 bytes): Always 0x0000
 
-    Total row size = 1 + length_marker + 4 bytes
+    Total row size = variable (12-16 bytes)
+    Entries are packed tightly (not 16-byte aligned!)
     """
 
     color_id: int
@@ -194,21 +195,39 @@ class ColorRow:
     color_rgb: int = 0  # Not stored in actual row structure!
 
     def marshal_binary(self, row_index: int) -> bytes:
-        """Marshal row to binary format (CORRECTED)."""
+        """Marshal color as variable-length entry (tightly packed)."""
         row = bytearray()
 
-        # String field: [length_marker][name][padding]
+        # Encode name as ASCII + null terminator
         name_bytes = self.name.encode('ascii')
-        length_marker = len(name_bytes) * 2 + 3
-        padding_len = length_marker - len(name_bytes) - 1
-        row.extend(bytes([length_marker]))
-        row.extend(name_bytes)
-        row.extend(b'\x00' * padding_len)
+        name_with_null = name_bytes + b'\x00'
 
-        # ID field: [id][id_dup][00 00]
-        row.extend(struct.pack('<B', self.color_id))
-        row.extend(struct.pack('<B', self.color_id))
-        row.extend(struct.pack('<H', 0))
+        # Calculate length_marker using formula from reference:
+        # length_marker = 2 * strlen(name) + 3
+        strlen = len(name_bytes)
+        length_marker = 2 * strlen + 3
+
+        # Calculate total length based on name length
+        # Short names (<=3 letters) get 12 bytes total
+        # Longer names (>=4 letters) get 16 bytes total
+        if strlen <= 3:
+            total_len = 12
+        else:
+            total_len = 16
+
+        # Calculate padding needed
+        # Structure: [length_marker (1)] + [name+null (N)] + [padding (P)] + [color_id (1)] + [color_id_dup (1)] + [0x0000 (2)]
+        name_len = len(name_with_null)
+        fixed_fields_len = 4  # color_id + color_id_dup + 0x0000
+        padding = total_len - 1 - name_len - fixed_fields_len
+
+        # Build entry
+        row.extend(bytes([length_marker]))  # Length marker
+        row.extend(name_with_null)          # Name + null
+        row.extend(b'\x00' * padding)       # Padding
+        row.extend(struct.pack('<B', self.color_id))  # color_id
+        row.extend(struct.pack('<B', self.color_id))  # color_id_dup
+        row.extend(struct.pack('<H', 0))    # 0x0000
 
         return bytes(row)
 
