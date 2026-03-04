@@ -315,38 +315,40 @@ class Unknown18Marshaller(SpecialPageMarshaller):
     """Marshaller for Unknown18 pages (Table 18).
 
     Structure from binary analysis:
-    - Heap prefix (bytes 40-47): First entry (8 bytes)
+    - Page header (bytes 0-31): 32-byte page header
+    - Heap prefix (bytes 32-39): First entry (8 bytes)
+    - Extra entry (bytes 40-47): Second entry (8 bytes)
     - Data header (bytes 48-64): Next 2 entries (8 bytes each)
-    - Row data (bytes 64+): Remaining 15 entries (8 bytes each)
+    - Row data (bytes 64+): Remaining entries (8 bytes each)
 
     Row structure: [field1 (2)][field2 (2)][field3 (4)]
     """
 
     def marshal_page(self, page_index: int, page_type: int, rows: List[Any]) -> bytes:
-        """Generate Unknown18 page with heap prefix + data header entries."""
-        if len(rows) < 3:
-            raise ValueError("Unknown18 requires at least 3 rows")
+        """Generate Unknown18 page with heap prefix + extra entry + data header entries."""
+        if len(rows) < 4:
+            raise ValueError("Unknown18 requires at least 4 rows")
 
         # Separate rows by location
-        heap_prefix_row = rows[0]
-        data_header_rows = rows[1:3]
-        regular_rows = rows[3:]
+        heap_prefix_and_extra = rows[0:2]  # 2 entries at bytes 32-47
+        data_header_rows = rows[2:4]  # 2 entries at bytes 48-63
+        regular_rows = rows[4:]  # Remaining entries at bytes 64+
 
-        # Build page header (bytes 0-39)
+        # Build page header (bytes 0-31)
         # Reference values for Page 38:
         # transaction=5, next_page=0x2d, free_size=0xf26, next_offset=0x88
+        # IMPORTANT: num_rows should be 17 (indexed rows), even if total rows > 17
+        num_indexed_rows = 17  # First 17 rows are indexed by RowSets
         page_header = bytearray(self._build_page_header(
-            page_index, page_type, len(rows),
+            page_index, page_type, num_indexed_rows,
             free_size=0xf26, next_offset=0x88,
             transaction=5, next_page=0x2d
         ))
 
-        # Build heap prefix (bytes 40-47) with first entry
-        heap_prefix = struct.pack('<HHI',
-            heap_prefix_row.field1,
-            heap_prefix_row.field2,
-            heap_prefix_row.field3
-        )
+        # Build heap prefix + extra entry (bytes 32-47)
+        heap_prefix = bytearray()
+        for row in heap_prefix_and_extra:
+            heap_prefix += struct.pack('<HHI', row.field1, row.field2, row.field3)
 
         # Build data header (bytes 48-63) with next 2 entries
         data_header = bytearray()
@@ -355,28 +357,86 @@ class Unknown18Marshaller(SpecialPageMarshaller):
 
         # Build regular row data (bytes 64+)
         row_data = bytearray()
-        row_offsets = [0, 0, 0]  # First 3 rows have offset 0
+        # First 4 rows offsets: heap prefix (32), extra entry (40), data header 1 (48), data header 2 (56)
+        row_offsets = [32, 40, 48, 56]
 
-        for row in regular_rows:
-            offset = len(row_data)
+        # Only first 13 regular rows are indexed (total 4 + 13 = 17 indexed rows)
+        indexed_regular_count = 13
+        row_data_start = 64  # Row data starts at byte 64 of the page
+
+        for i, row in enumerate(regular_rows):
+            offset = row_data_start + len(row_data)  # Absolute offset from page start
             row_bytes = struct.pack('<HHI', row.field1, row.field2, row.field3)
             row_data += row_bytes
-            row_offsets.append(offset)
+            if i < indexed_regular_count:
+                row_offsets.append(offset)
 
-        # Build RowSets
-        rowsets = self._build_rowsets(row_offsets)
+        # Build RowSets (only for indexed rows)
+        # Unknown18 has custom RowSets structure (48 bytes, not 80)
+        rowsets = self._build_unknown18_rowsets(row_offsets)
 
-        # Combine: page_header (0-39) + heap_prefix (40-47) + data_header (48-63) + row_data + rowsets
-        page = bytearray(page_header[:40])  # Bytes 0-39
-        page += heap_prefix  # Heap prefix (40-47)
-        page += data_header  # Data header (48-63)
+        # Combine: page_header (0-31) + heap_prefix (32-47) + data_header (48-63) + row_data + padding + rowsets
+        page = bytearray(page_header[:32])  # Bytes 0-31
+        page += heap_prefix  # Bytes 32-47
+        page += data_header  # Bytes 48-63
         page += row_data
+
+        # RowSets are stored at the END of the page, starting at offset 0xfd4 (4084)
+        rowsets_start = 0xfd4
+        current_size = len(page)
+
+        # Add padding between row_data and rowsets
+        if current_size < rowsets_start:
+            page += b'\x00' * (rowsets_start - current_size)
+
+        # Add RowSets at the end
         page += rowsets
 
-        # Pad to 4096 bytes
+        # Pad to exactly 4096 bytes
         page += b'\x00' * (4096 - len(page))
 
         return bytes(page)
+
+    def _build_unknown18_rowsets(self, row_offsets: List[int]) -> bytes:
+        """Build custom RowSet structure for Unknown18 page.
+
+        Reference structure (48 bytes total):
+        - 8 bytes header: [0x00008000][0x00010001]
+        - 40 bytes of offset entries (10 entries * 4 bytes each)
+        - Each entry is 2 offsets packed together
+
+        Offsets are stored in descending order.
+        """
+        if len(row_offsets) != 17:
+            raise ValueError(f"Unknown18 expects 17 offsets, got {len(row_offsets)}")
+
+        rowsets = bytearray()
+
+        # Header (8 bytes) - uses big-endian byte order!
+        rowsets += struct.pack('>II', 0x00008000, 0x01000100)
+
+        # Offset entries (10 entries * 4 bytes = 40 bytes)
+        # Each entry packs 2 offsets together
+        # Reference pattern: [0x78,0x70], [0x68,0x60], [0x58,0x50], ...
+
+        entries = [
+            (row_offsets[11], row_offsets[10]),  # (120, 112)
+            (row_offsets[9], row_offsets[8]),    # (104, 96)
+            (row_offsets[7], row_offsets[6]),    # (88, 80)
+            (row_offsets[5], row_offsets[4]),    # (72, 64)
+            (row_offsets[3], row_offsets[2]),    # (56, 48)
+            (row_offsets[1], row_offsets[0]),    # (40, 32)
+            (24, 16),                            # Extra entry
+            (8, 0),                              # Extra entry
+        ]
+
+        for offset1, offset2 in entries:
+            rowsets += struct.pack('<HH', offset1, offset2)
+
+        # End marker (4 bytes)
+        rowsets += struct.pack('<I', 0xffffffff)
+
+        return bytes(rowsets)
 
 
 class ColorsMarshaller(SpecialPageMarshaller):

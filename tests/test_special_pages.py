@@ -100,15 +100,25 @@ def test_unknown18_page():
     # Create default rows (18 total)
     rows = []
 
-    # First entry goes in heap prefix
+    # Structure from binary analysis of reference:
+    # - Bytes 32-39: Heap prefix (field1=17, field2=0, field3=0)
+    # - Bytes 40-47: Extra entry (field1=1, field2=6, field3=1)
+    # - Bytes 48-55: Data header entry 1 (field1=21, field2=7, field3=1)
+    # - Bytes 56-63: Data header entry 2 (field1=14, field2=8, field3=1)
+
+    # Heap prefix entry (bytes 32-39)
+    rows.append(Unknown18Row(17, 0, 0x00000000))
+
+    # Extra entry (bytes 40-47)
     rows.append(Unknown18Row(1, 6, 0x00000001))
 
-    # Next 2 entries go in data header
+    # Data header entries (bytes 48-63)
     rows.append(Unknown18Row(21, 7, 0x00000001))
     rows.append(Unknown18Row(14, 8, 0x00000001))
 
-    # Remaining 15 entries
+    # Remaining 17 entries (13 indexed + 4 unindexed)
     default_unknown18 = [
+        # First 13 are indexed by RowSets
         (8, 9, 0x00000001),
         (9, 10, 0x00000001),
         (10, 11, 0x00000001),
@@ -122,7 +132,11 @@ def test_unknown18_page():
         (3, 3, 0x00000400),
         (5, 4, 0x00000500),
         (6, 5, 0x00000600),
+        # Last 4 are NOT indexed (added after row_offsets)
         (11, 12, 0x00000700),
+        (0, 0, 0x00000000),
+        (0, 0, 0x00000000),
+        (0, 0, 0x00000000),
     ]
     for field1, field2, field3 in default_unknown18:
         rows.append(Unknown18Row(field1, field2, field3))
