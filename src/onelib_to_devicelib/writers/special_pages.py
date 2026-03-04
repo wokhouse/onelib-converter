@@ -600,16 +600,19 @@ class ColumnsMarshaller(SpecialPageMarshaller):
 class HistoryMarshaller(SpecialPageMarshaller):
     """Marshaller for History pages (Table 19).
 
-    Structure from binary analysis:
-    - Heap prefix (bytes 40-47): Special markers (05 00 00 00 06 00 00 00)
-    - Data header (bytes 48-64): First part of HistoryRow (header + date + unknown1)
-    - Row data (bytes 64+): Second part of HistoryRow (unknown2 + name + unknown3)
-
-    HistoryRow is split across header and row data.
+    Structure from binary analysis of reference Page 40:
+    - Page header (bytes 0-31): Standard 32-byte page header
+    - Special structure (bytes 32-63):
+      - 0x20-0x23: 01 00 00 00 (row count marker)
+      - 0x24-0x27: 00 00 00 00 (padding)
+      - 0x28-0x2B: 80 02 00 00 (special marker)
+      - 0x2C-0x33: 00 00 00 00 00 00 00 00 (padding, 8 bytes)
+    - Date field (bytes 64-79): Length marker + date string + padding + unknown1
+    - Name field (bytes 80+): unknown2 + length marker + name + padding + unknown3
     """
 
     def marshal_page(self, page_index: int, page_type: int, rows: List[Any]) -> bytes:
-        """Generate History page with split row structure."""
+        """Generate History page with correct structure."""
         if len(rows) < 1:
             raise ValueError("History requires at least 1 row")
 
@@ -618,44 +621,47 @@ class HistoryMarshaller(SpecialPageMarshaller):
         # Import encode_pdb_string
         from .metadata_rows import encode_pdb_string
 
-        # Build page header
-        # Reference values for Page 40:
-        # transaction=1, next_page=0x29, free_size=0xfaa, next_offset=0x28
+        # Build page header (32 bytes only, not 40!)
         page_header = bytearray(self._build_page_header(
             page_index, page_type, len(rows),
             free_size=0xfaa, next_offset=0x28,
             transaction=1, next_page=0x29
         ))
 
-        # Heap prefix with special markers
-        heap_prefix = struct.pack('<II', 5, 6)
+        # Take only first 32 bytes (page header)
+        page = bytearray(page_header[:32])
 
-        # Data header (bytes 48-64): First part of HistoryRow
-        # Format: [00000000][date_encoded][unknown1]
-        date_encoded = encode_pdb_string(history_row.date)
-        data_header = struct.pack('<I', 0)  # 00000000
-        data_header += date_encoded
-        data_header += struct.pack('<B', history_row.unknown1)  # unknown1
+        # Special structure (bytes 32-63)
+        page += struct.pack('<I', 1)  # 0x20-0x23: Row count marker
+        page += struct.pack('<I', 0)  # 0x24-0x27: Padding
+        page += struct.pack('<I', 0x0280)  # 0x28-0x2B: Special marker
+        page += b'\x00' * 8  # 0x2C-0x33: Padding (8 bytes)
 
-        # Row data (bytes 64+): Second part of HistoryRow
-        # Format: [unknown2 (1)][name_length_marker (1)][name (4)][padding (6)][unknown3 (1)]
-        row_data = struct.pack('<B', history_row.unknown2)  # unknown2
-        name_encoded = encode_pdb_string(history_row.name)
-        row_data += name_encoded
-        row_data += b'\x00' * 6  # padding
-        row_data += struct.pack('<B', history_row.unknown3)  # unknown3
+        # Date field (bytes 64-75)
+        # Format: [length_marker (1)][date (10)][unknown1 (1)]
+        # NOTE: No padding between date and unknown1!
+        page += struct.pack('<B', 0x17)  # Length marker
+        page += history_row.date.encode('ascii')  # Date string (10 bytes)
+        page += struct.pack('<B', history_row.unknown1)  # unknown1 (immediately after date)
 
-        # No RowSets for History (single entry, no offsets needed)
-        rowsets = b''
+        # Name field (bytes 76-87)
+        # Format: [unknown2 (1)][length_marker (1)][name (4)][unknown3 (1)][padding (7)]
+        page += struct.pack('<B', history_row.unknown2)  # unknown2 (0x1e)
+        name_len = len(history_row.name)
+        page += struct.pack('<B', name_len * 2 + 3)  # Length marker (0x0b for "1000")
+        page += history_row.name.encode('ascii')  # Name string (4 bytes)
+        page += struct.pack('<B', history_row.unknown3)  # unknown3 (0x03) - immediately after name!
+        page += b'\x00' * 7  # Padding (7 bytes)
 
-        # Combine: page_header (0-39) + heap_prefix (40-47) + data_header (48-63) + row_data
-        page = bytearray(page_header[:40])  # Bytes 0-39
-        page += heap_prefix  # Heap prefix (40-47)
-        page += data_header  # Data header (48-63)
-        page += row_data
-        page += rowsets
+        # Pad to position 0xffc (4092 bytes)
+        page += b'\x00' * (0xffc - len(page))
 
-        # Pad to 4096 bytes
-        page += b'\x00' * (4096 - len(page))
+        # Add 4-byte marker at end (bytes 0xffc-0xfff)
+        # Format: 01 00 01 00 (appears to be a count or end marker)
+        page += struct.pack('<HH', 1, 1)  # Two 16-bit values of 1
+
+        # Now page should be exactly 4096 bytes
+        if len(page) != 4096:
+            page += b'\x00' * (4096 - len(page))
 
         return bytes(page)
