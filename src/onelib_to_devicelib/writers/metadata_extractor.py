@@ -135,6 +135,20 @@ class MetadataExtractor:
         """
         return self.album_artists.get(album_name, 0)
 
+    def get_stats(self) -> Dict:
+        """Get statistics about extracted metadata.
+
+        Returns:
+            Dictionary with counts of each metadata type
+        """
+        return {
+            'genres': len(self.genres),
+            'artists': len(self.artists),
+            'albums': len(self.albums),
+            'labels': len(self.labels),
+            'keys': len(self.keys)
+        }
+
     def _normalize_key(self, key: str) -> str:
         """Normalize key text to rekordbox format.
 

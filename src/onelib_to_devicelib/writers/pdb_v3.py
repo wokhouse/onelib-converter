@@ -128,10 +128,8 @@ class PDBWriterV3:
         """
         table_type = 'PlaylistTree'
 
-        # Create page if needed
-        if table_type not in self.pages:
-            self.pages[table_type] = [DataPage(page_index=0, page_type=PageType.PLAYLIST_TREE)]
-            self._has_data = True  # Mark that we have actual data
+        # Note: Don't pre-create pages here - let _add_metadata_row handle IndexPage/DataPage structure
+        self._has_data = True  # Mark that we have actual data
 
         # Create playlist tree row
         row = PlaylistTreeRow(
@@ -160,9 +158,7 @@ class PDBWriterV3:
         """
         table_type = 'PlaylistEntries'
 
-        # Create page if needed
-        if table_type not in self.pages:
-            self.pages[table_type] = [DataPage(page_index=0, page_type=PageType.PLAYLIST_ENTRIES)]
+        # Note: Don't pre-create pages here - let _add_metadata_row handle IndexPage/DataPage structure
 
         # Create playlist entry row
         row = PlaylistEntryRow(

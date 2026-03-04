@@ -9,11 +9,13 @@ from dataclasses import dataclass, field
 
 # Try to import pyrekordbox
 try:
-    from pyrekordbox.db6.database import Rekordbox6Database
+    from pyrekordbox.devicelib_plus.database import DeviceLibraryPlus
+    from pyrekordbox.devicelib_plus import models
     PYREKORDBOX_AVAILABLE = True
 except ImportError:
     PYREKORDBOX_AVAILABLE = False
-    Rekordbox6Database = None
+    DeviceLibraryPlus = None
+    models = None
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +83,8 @@ class OneLibraryParser:
     """
     Parser for OneLibrary export format (Device Library Plus).
 
-    Uses pyrekordbox's Rekordbox6Database class to read the encrypted exportLibrary.db file.
+    Uses pyrekordbox's DeviceLibraryPlus class to read the encrypted exportLibrary.db file
+    exported from djay Pro.
     """
 
     def __init__(self, db_path: str | Path):
@@ -99,7 +102,7 @@ class OneLibraryParser:
                 "Install it with: pip install pyrekordbox"
             )
 
-        self.db: Optional[Rekordbox6Database] = None
+        self.db: Optional[DeviceLibraryPlus] = None
         self.tracks: Dict[int, Track] = {}
         self.playlists: Dict[int, Playlist] = {}
 
@@ -111,9 +114,9 @@ class OneLibraryParser:
         """
         logger.info(f"Parsing OneLibrary database: {self.db_path}")
 
-        # Open database using Rekordbox6Database (handles exportLibrary.db)
-        # Note: OneLibrary databases from djay Pro don't require unlock
-        self.db = Rekordbox6Database(self.db_path, unlock=False)
+        # Open database using DeviceLibraryPlus (handles OneLibrary exportLibrary.db)
+        # DeviceLibraryPlus automatically deobfuscates the SQLCipher key
+        self.db = DeviceLibraryPlus(self.db_path, unlock=True)
 
         # Load tracks
         self._load_tracks()
