@@ -94,14 +94,21 @@ class PDBWriterV3:
         # Get or create data page
         pages = self.pages[table_type]
 
-        # FIX #2: If we only have index page, create first data page
+        # Check if we need to create or replace data page
+        # After _ensure_all_tables_exist(), we might have a zero placeholder that needs replacing
         if len(pages) == 1:
-            # First data page (page_index will be corrected to 2 later)
+            # Only have index page, create first data page
             data_page = DataPage(page_index=0, page_type=PageType.TRACKS)
             pages.append(data_page)
             # Add this data page to index
             index_page = pages[0]
             index_page.add_entry(0)  # Will be corrected to page_index=2 later
+        elif len(pages) >= 2 and hasattr(pages[-1], '_is_zero_placeholder') and pages[-1]._is_zero_placeholder:
+            # Replace zero placeholder with real data page
+            # Keep the page_index from the placeholder
+            placeholder_index = pages[-1].header.page_index
+            data_page = DataPage(page_index=placeholder_index, page_type=PageType.TRACKS)
+            pages[-1] = data_page  # Replace the placeholder
 
         # Get current page (last data page)
         current_page = pages[-1]
@@ -208,13 +215,21 @@ class PDBWriterV3:
         # Get or create data page (starts from index 1, not 0)
         pages = self.pages[table_type]
 
-        # FIX #2: If we only have index page, create first data page
+        # Check if we need to create or replace data page
+        # After _ensure_all_tables_exist(), we might have a zero placeholder that needs replacing
         if len(pages) == 1:
+            # Only have index page, create first data page
             data_page = DataPage(page_index=0, page_type=page_type)
             pages.append(data_page)
             # Add this data page to index
             index_page = pages[0]
             index_page.add_entry(0)  # Will be corrected to actual page_index later
+        elif len(pages) >= 2 and hasattr(pages[-1], '_is_zero_placeholder') and pages[-1]._is_zero_placeholder:
+            # Replace zero placeholder with real data page
+            # Keep the page_index from the placeholder
+            placeholder_index = pages[-1].header.page_index
+            data_page = DataPage(page_index=placeholder_index, page_type=page_type)
+            pages[-1] = data_page  # Replace the placeholder
 
         # Get current page
         current_page = pages[-1]
@@ -712,27 +727,29 @@ class PDBWriterV3:
         # Exact page layout from EMPTY reference file (empty_onelib_and_devicelib)
         # Format: (first_page, last_page, num_pages)
         # Note: When tables have data, they may expand beyond this layout
+        # Tables that have data (even 1 row) need 2 pages (IndexPage + DataPage)
+        # Tables that are truly empty only need 1 page (just IndexPage)
         table_layout = {
-            'Tracks': (1, 2, 2),  # IndexPage + DataPage when we have tracks
-            'Genres': (3, 4, 2),  # IndexPage + DataPage (or zero page if empty)
-            'Artists': (5, 6, 2),  # IndexPage + DataPage (or zero page if empty)
-            'Albums': (7, 8, 2),  # IndexPage + DataPage (or zero page if empty)
-            'Labels': (9, 10, 2),  # IndexPage + zero page
-            'Keys': (11, 12, 2),  # IndexPage + DataPage (or zero page if empty)
-            'Colors': (13, 14, 2),      # 2 pages even when empty
-            'PlaylistTree': (15, 16, 2),  # IndexPage + DataPage (or zero page if empty)
-            'PlaylistEntries': (17, 18, 2),  # IndexPage + DataPage (or zero page if empty)
-            'Unknown9': (19, 20, 2),  # IndexPage + zero page
-            'Unknown10': (21, 22, 2),  # IndexPage + zero page
-            'HistoryPlaylists': (23, 24, 2),  # IndexPage + zero page
-            'HistoryEntries': (25, 26, 2),  # IndexPage + zero page
-            'Artwork': (27, 28, 2),  # IndexPage + DataPage (or zero page if empty)
-            'Unknown14': (29, 30, 2),  # IndexPage + zero page
-            'Unknown15': (31, 32, 2),  # IndexPage + zero page
-            'Columns': (33, 34, 2),     # 2 pages even when empty
-            'Unknown17': (35, 36, 2),   # 2 pages even when empty
-            'Unknown18': (37, 38, 2),   # 2 pages even when empty
-            'History': (39, 40, 2),     # 2 pages even when empty
+            'Tracks': (1, 2, 2),  # Has 2 rows - needs IndexPage + DataPage
+            'Genres': (3, 4, 2),  # Has 1 row - needs IndexPage + DataPage
+            'Artists': (5, 6, 2),  # Has 2 rows - needs IndexPage + DataPage
+            'Albums': (7, 8, 2),  # Has 2 rows - needs IndexPage + DataPage
+            'Labels': (9, 9, 1),  # Empty (0 rows) - just IndexPage
+            'Keys': (11, 12, 2),  # Has 24 rows - needs IndexPage + DataPage
+            'Colors': (13, 14, 2),      # Has 19 rows - always 2 pages
+            'PlaylistTree': (15, 16, 2),  # Has 1 row - needs IndexPage + DataPage
+            'PlaylistEntries': (17, 18, 2),  # Has 2 rows - needs IndexPage + DataPage
+            'Unknown9': (19, 19, 1),  # Empty (0 rows) - just IndexPage
+            'Unknown10': (21, 21, 1),  # Empty (0 rows) - just IndexPage
+            'HistoryPlaylists': (23, 23, 1),  # Empty (0 rows) - just IndexPage
+            'HistoryEntries': (25, 25, 1),  # Empty (0 rows) - just IndexPage
+            'Artwork': (27, 28, 2),  # Empty BUT still 2 pages (special case)
+            'Unknown14': (29, 29, 1),  # Empty (0 rows) - just IndexPage
+            'Unknown15': (31, 31, 1),  # Empty (0 rows) - just IndexPage
+            'Columns': (33, 34, 2),     # Has 26 rows - always 2 pages
+            'Unknown17': (35, 36, 2),   # Empty BUT always 2 pages (special case)
+            'Unknown18': (37, 38, 2),   # Empty BUT always 2 pages (special case)
+            'History': (39, 40, 2),     # Empty BUT always 2 pages (special case)
         }
 
         for table_type in self.TABLE_TYPES:
@@ -1088,24 +1105,24 @@ class PDBWriterV3:
         # Build table pointers
         table_pointers = []
 
-        # Empty candidate values from EMPTY reference PDB
+        # Empty candidate values from FULL reference PDB (onelib_and_devicelib)
         # These appear to be allocation hints for expanding tables
         # Format: [table_index] -> empty_candidate_value
         REFERENCE_EMPTY_CANDIDATES = {
-            0: 2,    # Tracks
-            1: 4,    # Genres
-            2: 6,    # Artists
-            3: 8,    # Albums
+            0: 50,   # Tracks
+            1: 53,   # Genres
+            2: 47,   # Artists
+            3: 48,   # Albums
             4: 10,   # Labels
-            5: 12,   # Keys
+            5: 49,   # Keys
             6: 42,   # Colors (2-page table)
-            7: 16,   # PlaylistTree
-            8: 18,   # PlaylistEntries
+            7: 46,   # PlaylistTree
+            8: 52,   # PlaylistEntries
             9: 20,   # Unknown9
             10: 22,  # Unknown10
             11: 24,  # HistoryPlaylists
             12: 26,  # HistoryEntries
-            13: 28,  # Artwork
+            13: 51,  # Artwork
             14: 30,  # Unknown14
             15: 32,  # Unknown15
             16: 43,  # Columns (2-page table)
