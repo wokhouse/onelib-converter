@@ -66,6 +66,40 @@ class PDBWriterV3:
         # This ensures tables have correct page_index values from the start
         self._ensure_all_tables_exist()
 
+    def _get_empty_candidate(self, table_idx: int) -> int:
+        """Get the empty_candidate value for a table.
+
+        Args:
+            table_idx: Table index (0-19)
+
+        Returns:
+            empty_candidate value
+        """
+        # Empty candidate values from FULL reference PDB
+        REFERENCE_EMPTY_CANDIDATES = {
+            0: 50,   # Tracks
+            1: 53,   # Genres
+            2: 47,   # Artists
+            3: 48,   # Albums
+            4: 10,   # Labels
+            5: 49,   # Keys
+            6: 42,   # Colors
+            7: 46,   # PlaylistTree
+            8: 52,   # PlaylistEntries
+            9: 20,   # Unknown9
+            10: 22,  # Unknown10
+            11: 24,  # HistoryPlaylists
+            12: 26,  # HistoryEntries
+            13: 51,  # Artwork
+            14: 30,  # Unknown14
+            15: 32,  # Unknown15
+            16: 43,  # Columns
+            17: 44,  # Unknown17
+            18: 45,  # Unknown18
+            19: 41,  # History
+        }
+        return REFERENCE_EMPTY_CANDIDATES.get(table_idx, 0)
+
     def add_track(self, track) -> int:
         """Add track to Tracks table.
 
@@ -94,21 +128,34 @@ class PDBWriterV3:
         # Get or create data page
         pages = self.pages[table_type]
 
-        # Check if we need to create or replace data page
-        # After _ensure_all_tables_exist(), we might have a zero placeholder that needs replacing
+        # Get empty_candidate for Tracks table (for next_page field)
+        table_idx = 0  # Tracks is table 0
+        empty_candidate = self._get_empty_candidate(table_idx)
+
+        # Check if we need to create or initialize data page
+        # After _ensure_all_tables_exist(), we might have a zero placeholder that needs initializing
         if len(pages) == 1:
             # Only have index page, create first data page
             data_page = DataPage(page_index=0, page_type=PageType.TRACKS)
+            data_page.header.next_page = empty_candidate  # CRITICAL: Set next_page for data pages
             pages.append(data_page)
             # Add this data page to index
             index_page = pages[0]
             index_page.add_entry(0)  # Will be corrected to page_index=2 later
         elif len(pages) >= 2 and hasattr(pages[-1], '_is_zero_placeholder') and pages[-1]._is_zero_placeholder:
-            # Replace zero placeholder with real data page
-            # Keep the page_index from the placeholder
-            placeholder_index = pages[-1].header.page_index
-            data_page = DataPage(page_index=placeholder_index, page_type=PageType.TRACKS)
-            pages[-1] = data_page  # Replace the placeholder
+            # Initialize zero placeholder page to accept data
+            # Don't replace the page - just unmark it as zero placeholder
+            current_page = pages[-1]
+            delattr(current_page, '_is_zero_placeholder')
+            # Set proper page flags for data page
+            current_page.header.page_flags = 0x34
+            # CRITICAL: Set next_page for data pages
+            current_page.header.next_page = empty_candidate
+        else:
+            # Page already exists and is initialized
+            # Make sure next_page is set correctly
+            if pages[-1].header.next_page == 0 or pages[-1].header.next_page == 0xFFFFFFFF:
+                pages[-1].header.next_page = empty_candidate
 
         # Get current page (last data page)
         current_page = pages[-1]
@@ -215,21 +262,34 @@ class PDBWriterV3:
         # Get or create data page (starts from index 1, not 0)
         pages = self.pages[table_type]
 
-        # Check if we need to create or replace data page
-        # After _ensure_all_tables_exist(), we might have a zero placeholder that needs replacing
+        # Get empty_candidate for this table (for next_page field)
+        table_idx = self.TABLE_TYPES.index(table_type)
+        empty_candidate = self._get_empty_candidate(table_idx)
+
+        # Check if we need to create or initialize data page
+        # After _ensure_all_tables_exist(), we might have a zero placeholder that needs initializing
         if len(pages) == 1:
             # Only have index page, create first data page
             data_page = DataPage(page_index=0, page_type=page_type)
+            data_page.header.next_page = empty_candidate  # CRITICAL: Set next_page for data pages
             pages.append(data_page)
             # Add this data page to index
             index_page = pages[0]
             index_page.add_entry(0)  # Will be corrected to actual page_index later
         elif len(pages) >= 2 and hasattr(pages[-1], '_is_zero_placeholder') and pages[-1]._is_zero_placeholder:
-            # Replace zero placeholder with real data page
-            # Keep the page_index from the placeholder
-            placeholder_index = pages[-1].header.page_index
-            data_page = DataPage(page_index=placeholder_index, page_type=page_type)
-            pages[-1] = data_page  # Replace the placeholder
+            # Initialize zero placeholder page to accept data
+            # Don't replace the page - just unmark it as zero placeholder
+            current_page = pages[-1]
+            delattr(current_page, '_is_zero_placeholder')
+            # Set proper page flags for data page
+            current_page.header.page_flags = 0x34
+            # CRITICAL: Set next_page for data pages
+            current_page.header.next_page = empty_candidate
+        else:
+            # Page already exists and is initialized
+            # Make sure next_page is set correctly
+            if pages[-1].header.next_page == 0 or pages[-1].header.next_page == 0xFFFFFFFF:
+                pages[-1].header.next_page = empty_candidate
 
         # Get current page
         current_page = pages[-1]
