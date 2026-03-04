@@ -81,7 +81,20 @@ class PageHeader:
         # Calculate actual values
         # num_rows_small is in units of 0x20, so divide to get actual row count
         num_rows = self.num_rows_small // 0x20  # Actual row count
-        num_row_offsets = num_rows  # Offset into row index (same as row count for now)
+
+        # FIX: Calculate num_row_offsets based on page type
+        # Standard pages: num_row_offsets = num_rows
+        # Special pages (Tracks, History): num_row_offsets = num_rows + 2
+        # Reference analysis shows:
+        # - Tracks page 2: 2 rows -> num_row_offsets=4 (2+2)
+        # - History page 40: 1 row -> num_row_offsets=3 (1+2)
+        # - Standard pages: num_row_offsets = num_rows (1:1 ratio)
+        if self.page_type == 0:  # PageType.TRACKS
+            num_row_offsets = num_rows + 2
+        elif self.page_type == 19:  # PageType.HISTORY
+            num_row_offsets = num_rows + 2
+        else:
+            num_row_offsets = num_rows
 
         # Pack into 24-bit bitfield (little-endian)
         # Lower 13 bits: num_row_offsets
