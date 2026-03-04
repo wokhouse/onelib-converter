@@ -514,67 +514,207 @@ class PDBWriterV3:
     def _set_metadata_data_headers(self) -> None:
         """Set data header values for metadata tables to match reference.
 
+        Phase 2: Use special page marshallers instead of raw_page_bytes workaround.
+
         The 16-byte data header (8 x uint16 fields) has specific values
         that don't match row counts. These values are table-specific and
         come from binary analysis of the reference.
 
-        For some tables (Columns, Unknown18), the heap prefix (bytes 40-48)
-        contains metadata for the first row, and the data header may contain
-        part of the first row's data.
+        For special tables (Colors, Columns, Unknown17, Unknown18, History):
+        - Use special page marshallers to generate proper page structure
+        - No longer copies bytes from reference file
         """
-        import struct
-        from onelib_to_devicelib.writers.page import DataPage
-
-        # Colors (page 14): Data header contains first row data (Pink color)
-        # Use raw_page_bytes to match reference exactly
-        if 'Colors' in self.pages:
-            for page in self.pages['Colors']:
-                if isinstance(page, DataPage):
-                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
-                    if ref_path.exists():
-                        ref_data = ref_path.read_bytes()
-                        page.raw_page_bytes = ref_data[14*4096:(14+1)*4096]  # Page 14
-
-        # Columns (page 34): Special handling for GENRE column
-        # Use raw_page_bytes to match reference exactly
-        if 'Columns' in self.pages:
-            for page in self.pages['Columns']:
-                if isinstance(page, DataPage):
-                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
-                    if ref_path.exists():
-                        ref_data = ref_path.read_bytes()
-                        page.raw_page_bytes = ref_data[34*4096:(34+1)*4096]  # Page 34
+        from .special_pages import (
+            Unknown17Marshaller, Unknown18Marshaller,
+            ColorsMarshaller, ColumnsMarshaller, HistoryMarshaller
+        )
 
         # Unknown17 (page 36): Data header contains first 2 entries
-        # Use raw_page_bytes to match reference exactly
         if 'Unknown17' in self.pages:
+            rows = self._get_unknown17_rows()
+            marshaller = Unknown17Marshaller()
             for page in self.pages['Unknown17']:
                 if isinstance(page, DataPage):
-                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
-                    if ref_path.exists():
-                        ref_data = ref_path.read_bytes()
-                        page.raw_page_bytes = ref_data[36*4096:(36+1)*4096]  # Page 36
+                    page.raw_page_bytes = marshaller.marshal_page(
+                        page.header.page_index, PageType.UNKNOWN17, rows
+                    )
 
         # Unknown18 (page 38): Heap prefix + data header contain first 3 entries
-        # Use raw_page_bytes to match reference exactly
         if 'Unknown18' in self.pages:
+            rows = self._get_unknown18_rows()
+            marshaller = Unknown18Marshaller()
             for page in self.pages['Unknown18']:
                 if isinstance(page, DataPage):
-                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
-                    if ref_path.exists():
-                        ref_data = ref_path.read_bytes()
-                        page.raw_page_bytes = ref_data[38*4096:(38+1)*4096]  # Page 38
+                    page.raw_page_bytes = marshaller.marshal_page(
+                        page.header.page_index, PageType.UNKNOWN18, rows
+                    )
+
+        # Colors (page 14): Data header contains first color (Pink)
+        if 'Colors' in self.pages:
+            rows = self._get_color_rows()
+            marshaller = ColorsMarshaller()
+            for page in self.pages['Colors']:
+                if isinstance(page, DataPage):
+                    page.raw_page_bytes = marshaller.marshal_page(
+                        page.header.page_index, PageType.COLORS, rows
+                    )
+
+        # Columns (page 34): Heap prefix + data header contain first column (GENRE)
+        if 'Columns' in self.pages:
+            rows = self._get_column_rows()
+            marshaller = ColumnsMarshaller()
+            for page in self.pages['Columns']:
+                if isinstance(page, DataPage):
+                    page.raw_page_bytes = marshaller.marshal_page(
+                        page.header.page_index, PageType.COLUMNS, rows
+                    )
 
         # History (page 40): Special structure - HistoryRow split across data header and row data
-        # Use raw_page_bytes override to set entire page content from reference
         if 'History' in self.pages:
+            rows = self._get_history_rows()
+            marshaller = HistoryMarshaller()
             for page in self.pages['History']:
                 if isinstance(page, DataPage):
-                    # Extract the complete page 40 from reference
-                    ref_path = Path('validation_data/empty_onelib_and_devicelib/PIONEER/rekordbox/export.pdb')
-                    if ref_path.exists():
-                        ref_data = ref_path.read_bytes()
-                        page.raw_page_bytes = ref_data[40*4096:(40+1)*4096]  # Page 40 (40*4096 to 41*4096)
+                    page.raw_page_bytes = marshaller.marshal_page(
+                        page.header.page_index, PageType.HISTORY, rows
+                    )
+
+    def _get_unknown17_rows(self) -> List:
+        """Extract Unknown17 rows including data header entries."""
+        rows = []
+
+        # First 4 entries go in data header (bytes 32-63)
+        rows.append(Unknown17Row(22, 0, 0x00000000))  # Entry at bytes 32-39
+        rows.append(Unknown17Row(1, 1, 0x00000163))   # Entry at bytes 40-47
+        rows.append(Unknown17Row(5, 6, 0x00000105))   # Entry at bytes 48-55
+        rows.append(Unknown17Row(6, 7, 0x00000163))   # Entry at bytes 56-63
+
+        # Remaining entries (from binary analysis of reference)
+        default_unknown17 = [
+            (7, 8, 0x00000163),
+            (8, 9, 0x00000163),
+            (9, 10, 0x00000163),
+            (10, 11, 0x00000163),
+            (13, 15, 0x00000163),
+            (14, 19, 0x00000104),
+            (15, 20, 0x00000106),
+            (16, 21, 0x00000163),
+            (18, 23, 0x00000163),
+            (2, 2, 0x00010002),
+            (3, 3, 0x00020003),
+            (4, 4, 0x00030001),
+            (11, 12, 0x00040063),
+            (17, 5, 0x00050063),
+            (19, 22, 0x00060063),
+            (20, 18, 0x00070063),
+            (27, 26, 0x00080263),
+            (24, 17, 0x00090063),
+        ]
+        for field1, field2, field3 in default_unknown17:
+            rows.append(Unknown17Row(field1, field2, field3))
+
+        return rows
+
+    def _get_unknown18_rows(self) -> List:
+        """Extract Unknown18 rows including heap prefix and data header entries."""
+        rows = []
+
+        # First entry goes in heap prefix
+        rows.append(Unknown18Row(1, 6, 0x00000001))
+
+        # Next 2 entries go in data header
+        rows.append(Unknown18Row(21, 7, 0x00000001))
+        rows.append(Unknown18Row(14, 8, 0x00000001))
+
+        # Remaining entries added via add_unknown18()
+        default_unknown18 = [
+            (8, 9, 0x00000001),
+            (9, 10, 0x00000001),
+            (10, 11, 0x00000001),
+            (15, 13, 0x00000001),
+            (13, 15, 0x00000001),
+            (23, 16, 0x00000001),
+            (22, 17, 0x00000001),
+            (25, 0, 0x00000100),
+            (26, 1, 0x00000200),
+            (2, 2, 0x00000300),
+            (3, 3, 0x00000400),
+            (5, 4, 0x00000500),
+            (6, 5, 0x00000600),
+            (11, 12, 0x00000700),
+        ]
+        for field1, field2, field3 in default_unknown18:
+            rows.append(Unknown18Row(field1, field2, field3))
+
+        return rows
+
+    def _get_color_rows(self) -> List:
+        """Extract Color rows including data header entry (Pink)."""
+        rows = []
+
+        # First color (Pink) goes in data header
+        rows.append(ColorRow(color_id=2, name="Pink"))
+
+        # Remaining colors added via add_color()
+        default_colors = [
+            (3, "Red"),
+            (4, "Orange"),
+            (5, "Yellow"),
+            (6, "Green"),
+            (7, "Aqua"),
+            (8, "Blue"),
+            (0, "Purple"),
+        ]
+        for color_id, name in default_colors:
+            rows.append(ColorRow(color_id=color_id, name=name))
+
+        return rows
+
+    def _get_column_rows(self) -> List:
+        """Extract Column rows including heap prefix + data header entry (GENRE)."""
+        rows = []
+
+        # First column (GENRE) split between heap prefix and data header
+        rows.append(ColumnRow(column_id=1, name="GENRE", field_type=0x0080, size_type=0x00001290))
+
+        # Remaining columns added via add_column()
+        default_columns = [
+            (2, "ARTIST", 0x0081, 0x00001490),
+            (3, "ALBUM", 0x0082, 0x00001290),
+            (4, "TRACK", 0x0083, 0x00001290),
+            (5, "BPM", 0x0085, 0x00000e90),
+            (6, "RATING", 0x0086, 0x00001490),
+            (7, "YEAR", 0x0087, 0x00001090),
+            (8, "REMIXER", 0x0088, 0x00001690),
+            (9, "LABEL", 0x0089, 0x00001290),
+            (10, "ORIGINAL ARTIST", 0x008a, 0x00002690),
+            (11, "KEY", 0x008b, 0x00000e90),
+            (12, "CUE", 0x008d, 0x00000e90),
+            (13, "COLOR", 0x008e, 0x00001290),
+            (14, "TIME", 0x0092, 0x00001090),
+            (15, "BITRATE", 0x0093, 0x00001690),
+            (16, "FILE NAME", 0x0094, 0x00001a90),
+            (17, "PLAYLIST", 0x0084, 0x00001890),
+            (18, "HOT CUE BANK", 0x0098, 0x00002090),
+            (19, "HISTORY", 0x0095, 0x00001690),
+            (20, "SEARCH", 0x0091, 0x00001490),
+            (21, "COMMENTS", 0x0096, 0x00001890),
+            (22, "DATE ADDED", 0x008c, 0x00001c90),
+            (23, "DJ PLAY COUNT", 0x0097, 0x00002290),
+            (24, "FOLDER", 0x0090, 0x00001490),
+            (25, "DEFAULT", 0x00a1, 0x00001690),
+            (26, "ALPHABET", 0x00a2, 0x00001890),
+            (27, "MATCHING", 0x00aa, 0x00001890),
+        ]
+        for col_id, name, field_type, size_type in default_columns:
+            rows.append(ColumnRow(column_id=col_id, name=name, field_type=field_type, size_type=size_type))
+
+        return rows
+
+    def _get_history_rows(self) -> List:
+        """Extract History rows."""
+        # Single history entry
+        return [HistoryRow(date="2026-03-02", name="1000", unknown1=0x19, unknown2=0x1e, unknown3=0x03)]
 
     def _add_history_row_second_part(self) -> None:
         """Add the second part of HistoryRow to row data (after data header is set).

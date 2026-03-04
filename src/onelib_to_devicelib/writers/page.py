@@ -261,6 +261,7 @@ class DataPage:
         self.heap = TwoWayHeap(page_size=4096, data_header_size=48)  # 32-byte header + 16-byte data header
         self.rowsets: List[RowSet] = []
         self.raw_page_bytes: Optional[bytes] = None  # Override for entire page content (for History, etc.)
+        self._use_special_layout = False  # Mark special pages (History, Colors, Columns, Unknown17, Unknown18)
 
     def insert_row(self, row_data: bytes) -> int:
         """Insert row and return row index.
@@ -304,25 +305,66 @@ class DataPage:
 
         return row_index
 
+    def set_special_layout(self, use_special: bool = True) -> None:
+        """Mark page as using special layout (History, Colors, Columns, etc.).
+
+        Special pages have non-standard heap layouts where:
+        - Data header may contain first row data (Colors, Columns, Unknown17, Unknown18)
+        - Heap prefix (bytes 40-47) may contain row metadata (Columns, Unknown18)
+        - HistoryRow is split across data header and row data (History)
+
+        For now, special pages must use raw_page_bytes override.
+        Phase 2 will implement proper special layout generation.
+
+        Args:
+            use_special: True to mark as special layout page
+        """
+        self._use_special_layout = use_special
+
     def marshal_binary(self) -> bytes:
         """Serialize complete page.
 
-        Builds:
-        1. 32-byte page header
-        2. 8-byte data page header
-        3. Row data from heap
-        4. Padding
-        5. Row index (RowSets)
+        Routes to appropriate marshaller based on page type:
+        - Special layout (History, Colors, Columns, etc.): uses raw_page_bytes
+        - Normal layout (Tracks, Artists, Albums, etc.): standard structure
 
         Returns:
             4096 bytes of complete page data
         """
-        # Allow override with raw page bytes for special cases (History, etc.)
+        # Check for raw_page_bytes override first (highest priority)
+        # This is used for special pages (History, Colors, Columns, Unknown17, Unknown18)
         if self.raw_page_bytes:
             if len(self.raw_page_bytes) != 4096:
                 raise ValueError(f"raw_page_bytes must be exactly 4096 bytes, got {len(self.raw_page_bytes)}")
             return self.raw_page_bytes
 
+        # Route to appropriate marshaller based on layout type
+        if self._use_special_layout:
+            # Special layout - Phase 2 will implement this properly
+            # For now, raise error if no raw_page_bytes provided
+            raise NotImplementedError(
+                "Special layout not yet implemented - use raw_page_bytes override. "
+                "Special pages: History, Colors, Columns, Unknown17, Unknown18"
+            )
+        else:
+            # Normal layout - standard page structure
+            return self._marshal_binary_normal()
+
+    def _marshal_binary_normal(self) -> bytes:
+        """Normal page layout (Tracks, Artists, Albums, Genres, Keys, Playlists, etc.).
+
+        Standard structure:
+        - Bytes 0-31:   Page header part 1 (magic, page_index, page_type, next_page)
+        - Bytes 32-47:  Page header part 2 (transaction, unknown2, bitfields, free_size, next_offset)
+        - Bytes 48-63:  Data header (16 bytes, 8 × uint16)
+        - Bytes 64+:    Row data + row index from heap
+
+        Critical: Heap.to_bytes() now returns top_data + padding + bottom_data
+        (without heap_prefix), so row data starts at byte 64 exactly.
+
+        Returns:
+            4096 bytes of complete page data
+        """
         # Build row index at bottom of heap
         # Write RowSets in reverse order
         for rowset in reversed(self.rowsets):
@@ -352,8 +394,8 @@ class DataPage:
         page += struct.pack('<HH',
             self.header.free_size, self.header.next_heap_write_offset)
 
-        # 16-byte data header (8 x uint16)
-        # Allow override with raw bytes for special cases (Colors, etc.)
+        # 16-byte data header (8 x uint16) at bytes 48-63
+        # Allow override with raw bytes for special cases
         if self.data_header.raw_bytes:
             page += self.data_header.raw_bytes
         else:
@@ -363,12 +405,33 @@ class DataPage:
                 self.data_header.unknown9, self.data_header.num_rows_large,
                 self.data_header.unknown10, self.data_header.unknown11)
 
-        # Add heap data
+        # Add heap data (row data + padding + row index)
+        # CRITICAL FIX: heap.to_bytes() now returns top_data + padding + bottom_data
+        # WITHOUT heap_prefix, so this correctly starts at byte 64
         page += self.heap.to_bytes()
 
         # Pad to page size
         assert len(page) <= 4096, f"Page too large: {len(page)} bytes"
         return bytes(page + b'\x00' * (4096 - len(page)))
+
+    def _marshal_binary_special(self) -> bytes:
+        """Special page layout (History, Colors, Columns, Unknown17, Unknown18).
+
+        TODO: Implement proper special layout in Phase 2.
+        For now, special pages must use raw_page_bytes override.
+
+        Special layout characteristics:
+        - Data header may contain first row data (Colors, Columns, Unknown17, Unknown18)
+        - Heap prefix (bytes 40-47) may contain row metadata (Columns, Unknown18)
+        - HistoryRow is split across data header and row data (History)
+
+        Returns:
+            4096 bytes of complete page data
+        """
+        raise NotImplementedError(
+            "Special layout not yet implemented - use raw_page_bytes override. "
+            "Phase 2 will implement proper special page layouts."
+        )
 
     @classmethod
     def unmarshal_binary(cls, data: bytes, offset: int = 0) -> 'DataPage':

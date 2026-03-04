@@ -14,24 +14,26 @@ class TwoWayHeap:
     - Middle: Padding fills the gap
     """
 
-    def __init__(self, page_size: int = 4096, data_header_size: int = 40):
+    def __init__(self, page_size: int = 4096, data_header_size: int = 48):
         """Initialize two-way heap.
 
         Args:
             page_size: Total page size in bytes (default 4096)
-            data_header_size: Size of page header to reserve (40 for page + data headers)
+            data_header_size: Size of page header to reserve (48 for 32-byte page + 16-byte data header)
+
+        Note: The heap_prefix is stored separately for special pages (Columns, Unknown18)
+        but is NOT included in to_bytes() output for normal pages.
         """
         self.page_size = page_size
         self.data_header_size = data_header_size
-        # Reserve space for 8-byte data header prefix in the heap
-        # The heap will output: [8-byte prefix][row data][padding][row index]
-        # So we need to reduce heap_size by 8 bytes
-        self.heap_size = page_size - data_header_size - 8
+        # Heap size is page_size minus data_header_size (48 bytes)
+        # We no longer subtract 8 bytes for heap_prefix since it's not in to_bytes() output
+        self.heap_size = page_size - data_header_size
         self.top_cursor = 0
         self.bottom_cursor = self.heap_size
         self.top_data = bytearray()
         self.bottom_data = bytearray()
-        self.heap_prefix = b'\x00' * 8  # Default to null bytes
+        self.heap_prefix = b'\x00' * 8  # Metadata for special pages (Columns, Unknown18)
 
     def write_top(self, data: bytes) -> int:
         """Write data to top of heap (row data).
@@ -105,18 +107,19 @@ class TwoWayHeap:
         self.heap_prefix = prefix
 
     def to_bytes(self) -> bytes:
-        """Combine top and bottom into final page heap.
+        """Combine top and bottom into final heap data.
 
         Returns:
-            Complete heap bytes with:
-            - Heap prefix (8 bytes)
-            - Top data (row data)
-            - Padding in the middle
-            - Bottom data (row index)
+            Heap data WITHOUT prefix: top_data + padding + bottom_data
+
+        Note: The heap_prefix is NOT included in output. For normal pages,
+        the data header (bytes 48-63) is written separately by DataPage.
+        For special pages (Columns, Unknown18), the heap_prefix is handled
+        differently via raw_page_bytes override.
         """
-        # Use the custom heap prefix (or default null bytes)
+        # Don't include heap_prefix - page structure handles it separately
         padding = self.bottom_cursor - self.top_cursor
-        return bytes(self.heap_prefix + self.top_data + (b'\x00' * padding) + self.bottom_data)
+        return bytes(self.top_data + (b'\x00' * padding) + self.bottom_data)
 
     def __repr__(self) -> str:
         """String representation of heap state."""
