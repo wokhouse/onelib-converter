@@ -545,19 +545,59 @@ class PDBWriterV3:
         # Note: _add_history_row_second_part() is no longer needed since we use raw_page_bytes
         # self._add_history_row_second_part()  # Commented out - using raw_page_bytes instead
 
+    def _set_normal_data_headers(self) -> None:
+        """Set data header values for normal metadata tables to match reference.
+
+        The 8-byte data header (4 x uint16) has specific values that vary by table type.
+        These values are extracted from binary analysis of the reference PDB.
+
+        Format: (unknown5, unknown6, unknown7, num_rows_large)
+
+        Note: Special tables (Colors, Columns, Unknown17, Unknown18, History) are handled
+        separately in _set_metadata_data_headers() using special page marshallers.
+        """
+        # Data header values extracted from reference PDB analysis
+        # Values are (unknown5, unknown6, unknown7, num_rows_large)
+        DATA_HEADER_VALUES = {
+            'Tracks': (2, 2, 0, 0),  # First data page for Tracks
+            'Genres': (2, 2, 0, 0),  # Updated from reference
+            'Artists': (1, 0, 0, 0),
+            'Albums': (1, 1, 0, 0),
+            'Labels': (1, 1, 0, 0),
+            'Keys': (1, 1, 0, 0),  # Updated from reference Page 12
+            'PlaylistTree': (1, 1, 0, 0),
+            'PlaylistEntries': (1, 1, 0, 0),
+            'Artwork': (0, 0, 0, 0),  # Updated from reference
+        }
+
+        for table_type, values in DATA_HEADER_VALUES.items():
+            if table_type in self.pages:
+                for page in self.pages[table_type]:
+                    if isinstance(page, DataPage) and not page.raw_page_bytes:
+                        page.data_header.unknown5 = values[0]
+                        page.data_header.unknown6 = values[1]
+                        page.data_header.unknown7 = values[2]
+                        page.data_header.num_rows_large = values[3]
+
     def _set_metadata_data_headers(self) -> None:
         """Set data header values for metadata tables to match reference.
 
         Phase 2: Use special page marshallers instead of raw_page_bytes workaround.
 
-        The 16-byte data header (8 x uint16 fields) has specific values
-        that don't match row counts. These values are table-specific and
-        come from binary analysis of the reference.
+        The 8-byte data header (4 x uint16) has specific values that vary by table type.
+        These values are table-specific and come from binary analysis of the reference.
+
+        For normal tables (Genres, Artists, Albums, etc.):
+        - Use _set_normal_data_headers() to set standard data header values
 
         For special tables (Colors, Columns, Unknown17, Unknown18, History):
         - Use special page marshallers to generate proper page structure
-        - No longer copies bytes from reference file
+        - These tables have non-standard layouts where data header contains row data
         """
+        # FIRST: Set data headers for normal pages
+        self._set_normal_data_headers()
+
+        # THEN: Handle special pages with marshallers
         from .special_pages import (
             Unknown17Marshaller, Unknown18Marshaller,
             ColorsMarshaller, ColumnsMarshaller, HistoryMarshaller
@@ -982,12 +1022,18 @@ class PDBWriterV3:
             is_multi_page = table_type in multi_page_tables
 
             if is_multi_page:
-                # Multi-page tables: Create DataPages with flags=0x24
+                # Multi-page tables: Create DataPages
                 for i in range(1, num_pages):
                     page_num = first_page + i
                     page = DataPage(page_index=page_num, page_type=page_type)
                     page.header.num_rows_small = 0  # Empty
-                    page.header.page_flags = 0x24  # Multi-page DataPage flag
+
+                    # Set page_flags based on table type
+                    # History uses 0x34 (normal data page), others use 0x24
+                    if table_type == 'History':
+                        page.header.page_flags = 0x34
+                    else:
+                        page.header.page_flags = 0x24  # Multi-page DataPage flag
 
                     # Chain to next page or mark as last
                     if i < num_pages - 1:

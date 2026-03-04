@@ -45,10 +45,10 @@ class TrackHeader:
     checksum: int = 0  # Checksum (28 bits??)
 
     # Bytes 24-25 (2 bytes)
-    unnamed7: int = 0x758a  # From REX reference value
+    unnamed7: int = 0x63da  # Reference value (appears to be export-specific constant)
 
     # Bytes 26-27 (2 bytes)
-    unnamed8: int = 0x57a2  # From REX reference value
+    unnamed8: int = 0x52ef  # Reference value (appears to be export-specific constant)
 
     # Bytes 28-31 (4 bytes)
     artwork_id: int = 0
@@ -212,11 +212,11 @@ class TrackRow:
             # Bytes 20-23 (checksum - TODO: implement proper algorithm)
             checksum=0,
             # Bytes 24-25
-            unnamed7=0x758a,  # From REX reference value
+            unnamed7=0x63da,  # Reference value
             # Bytes 26-27
-            unnamed8=0x57a2,  # From REX reference value
+            unnamed8=0x52ef,  # Reference value
             # Bytes 28-31
-            artwork_id=getattr(track, 'artwork_id', 0),
+            artwork_id=0,  # Always 0 since we don't copy artwork files
             # Bytes 32-35
             key_id=key_id,
             # Bytes 36-39

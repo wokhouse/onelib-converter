@@ -111,20 +111,16 @@ class PageHeader:
 
 @dataclass
 class DataPageHeader:
-    """16-byte data page header.
+    """8-byte data page header (4 x uint16 fields).
 
     Comes after the 32-byte page header.
-    Structure: 8 x uint16 fields
+    Structure: 4 x uint16 fields (not 8!)
     """
     unknown5: int = 0
     unknown6: int = 0
     unknown7: int = 0
-    unknown8: int = 0
-    unknown9: int = 0
-    num_rows_large: int = 0
-    unknown10: int = 0
-    unknown11: int = 0
-    raw_bytes: Optional[bytes] = None  # Override for raw 16-byte data header
+    num_rows_large: int = 0  # Renamed from unknown8
+    raw_bytes: Optional[bytes] = None  # Override for raw 8-byte data header
 
 
 @dataclass
@@ -269,9 +265,10 @@ class DataPage:
         """
         self.header = PageHeader(page_index=page_index, page_type=page_type)
         self.data_header = DataPageHeader()
-        # Reserve 40 bytes for page + data headers, plus 8 bytes of space for data header
-        # This ensures heap data starts at byte 48 (40 headers + 8 data header space)
-        self.heap = TwoWayHeap(page_size=4096, data_header_size=48)  # 32-byte header + 16-byte data header
+        # Reserve 40 bytes for page + data headers
+        # Structure: 32-byte page header + 8-byte data header
+        # This ensures heap data starts at byte 40
+        self.heap = TwoWayHeap(page_size=4096, data_header_size=40)
         self.rowsets: List[RowSet] = []
         self.raw_page_bytes: Optional[bytes] = None  # Override for entire page content (for History, etc.)
         self._use_special_layout = False  # Mark special pages (History, Colors, Columns, Unknown17, Unknown18)
@@ -309,7 +306,13 @@ class DataPage:
         # NOTE: num_rows_small increments by 0x20, not 1!
         # This is a critical detail from the REX implementation
         self.header.num_rows_small += 0x20
-        self.header.transaction += 1
+
+        # Calculate actual row count and set transaction
+        # FIX: transaction = num_rows * 10 (not increment-by-1)
+        # Reference analysis: 2 rows → transaction = 20
+        actual_row_count = self.header.num_rows_small // 0x20
+        self.header.transaction = actual_row_count * 10
+
         self.header.free_size = self.heap.free_size()
         self.header.next_heap_write_offset = self.heap.top_cursor
 
@@ -407,20 +410,17 @@ class DataPage:
         page += struct.pack('<HH',
             self.header.free_size, self.header.next_heap_write_offset)
 
-        # 16-byte data header (8 x uint16) at bytes 48-63
+        # 8-byte data header (4 x uint16) at bytes 32-39
         # Allow override with raw bytes for special cases
         if self.data_header.raw_bytes:
             page += self.data_header.raw_bytes
         else:
-            page += struct.pack('<HHHHHHHH',
+            page += struct.pack('<HHHH',
                 self.data_header.unknown5, self.data_header.unknown6,
-                self.data_header.unknown7, self.data_header.unknown8,
-                self.data_header.unknown9, self.data_header.num_rows_large,
-                self.data_header.unknown10, self.data_header.unknown11)
+                self.data_header.unknown7, self.data_header.num_rows_large)
 
-        # Add heap data (row data + padding + row index)
-        # CRITICAL FIX: heap.to_bytes() now returns top_data + padding + bottom_data
-        # WITHOUT heap_prefix, so this correctly starts at byte 64
+        # Add heap data (row data + padding + row index) starting at byte 40
+        # heap.to_bytes() returns top_data + padding + bottom_data WITHOUT heap_prefix
         page += self.heap.to_bytes()
 
         # Pad to page size

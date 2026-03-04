@@ -39,7 +39,8 @@ class SpecialPageMarshaller(ABC):
 
     def _build_page_header(self, page_index: int, page_type: int,
                           num_rows: int, free_size: int, next_offset: int,
-                          transaction: int = 1, next_page: int = None) -> bytes:
+                          transaction: int = 1, next_page: int = None,
+                          page_flags: int = 0x24) -> bytes:
         """Build 48-byte page header (32 + 16 bytes).
 
         Args:
@@ -71,7 +72,7 @@ class SpecialPageMarshaller(ABC):
 
         header += struct.pack('<II', transaction, 0)  # transaction, unknown2
         header += bitfields
-        header += struct.pack('<B', 0x24)  # page_flags for multi-page data pages
+        header += struct.pack('<B', page_flags)  # page_flags (parameter)
         header += struct.pack('<HH', free_size, next_offset)  # free_size, next_offset
 
         # Return first 48 bytes (32-byte page header + 16-byte data header placeholder)
@@ -659,7 +660,8 @@ class HistoryMarshaller(SpecialPageMarshaller):
         page_header = bytearray(self._build_page_header(
             page_index, page_type, len(rows),
             free_size=0xfaa, next_offset=0x28,
-            transaction=1, next_page=0x29
+            transaction=18, next_page=0x29,  # Fixed: reference has transaction=18
+            page_flags=0x34  # Fixed: History uses 0x34, not 0x24
         ))
 
         # Take only first 32 bytes (page header)
