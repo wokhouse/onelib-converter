@@ -442,73 +442,61 @@ class Unknown18Marshaller(SpecialPageMarshaller):
 class ColorsMarshaller(SpecialPageMarshaller):
     """Marshaller for Colors pages (Table 6).
 
-    Structure from binary analysis:
-    - Data header (bytes 48-64): First color (Pink) encoded
-    - Row data (bytes 64+): Remaining 7 colors
-
-    Encoding: encode_pdb_string() - [length_marker][name][padding][color_id][color_id_dup][0000]
-    Heap prefix: Special marker values f8 ff ff 1f f8 ff ff 1f
+    Structure from binary analysis of reference Page 14:
+    - Page header (bytes 0-31): Standard 32-byte page header
+    - Heap prefix (bytes 32-47): Special structure (not f8 ff ff 1f!)
+      - 0x20-0x23: 08 00 00 00
+      - 0x24-0x27: 00 00 00 00
+      - 0x28-0x2B: 00 00 00 00
+      - 0x2C-0x2F: 01 01 00 00
+    - Color data (bytes 48+): 8 color entries using encode_pdb_string()
     """
 
     def marshal_page(self, page_index: int, page_type: int, rows: List[Any]) -> bytes:
-        """Generate Colors page with first color in data header."""
+        """Generate Colors page with correct heap prefix structure."""
         if len(rows) < 1:
-            raise ValueError("Colors requires at least 1 row for data header")
-
-        # First color goes in data header
-        first_color = rows[0]
-        remaining_colors = rows[1:]
+            raise ValueError("Colors requires at least 1 row")
 
         # Import encode_pdb_string
         from .metadata_rows import encode_pdb_string
 
-        # Encode first color for data header
-        # Format: [unknown5 (2)][unknown6 (2)][encoded_name][color_id (2)][color_id_dup (2)][0000 (2)]
-        name_encoded = encode_pdb_string(first_color.name)
-        data_header = struct.pack('<HH', 0, 0)  # unknown5, unknown6
-        data_header += name_encoded
-        data_header += struct.pack('<HHH',
-            first_color.color_id,
-            first_color.color_id,  # Duplicate
-            0  # Padding
-        )
-
-        # Build remaining colors as regular rows
-        row_data = bytearray()
-        row_offsets = [0]  # First color has offset 0
-
-        for color in remaining_colors:
-            offset = len(row_data)
-            name_encoded = encode_pdb_string(color.name)
-            row_bytes = struct.pack('<HH', 0, 0)
-            row_bytes += name_encoded
-            row_bytes += struct.pack('<HHH',
-                color.color_id,
-                color.color_id,
-                0
-            )
-            row_data += row_bytes
-            row_offsets.append(offset)
-
-        # Build RowSets
-        rowsets = self._build_rowsets(row_offsets)
-
-        # Build page header
-        # Reference values for Page 14:
-        # transaction=2, next_page=0x2a, free_size=0xf48, next_offset=0x7c
+        # Build page header (32 bytes only)
         page_header = bytearray(self._build_page_header(
             page_index, page_type, len(rows),
             free_size=0xf48, next_offset=0x7c,
             transaction=2, next_page=0x2a
         ))
 
-        # Heap prefix with special markers
-        heap_prefix = struct.pack('<II', 0x1ffffff8, 0x1ffffff8)
+        # Take only first 32 bytes
+        page = bytearray(page_header[:32])
 
-        # Combine: page_header (0-39) + heap_prefix (40-47) + data_header (48-63) + row_data + rowsets
-        page = bytearray(page_header[:40])  # Bytes 0-39
-        page += heap_prefix  # Heap prefix (40-47)
-        page += data_header  # Data header (48-63)
+        # Heap prefix (bytes 32-47): Special structure from reference
+        page += struct.pack('<I', 8)  # 0x20-0x23: 08 00 00 00
+        page += b'\x00' * 8  # 0x24-0x2B: 8 bytes of zeros
+        page += struct.pack('<I', 0x0101)  # 0x2C-0x2F: 01 01 00 00
+
+        # Build all color entries (8 total)
+        row_data = bytearray()
+        row_offsets = [0]  # First color has offset 0
+
+        for color in rows:
+            offset = len(row_data)
+            # Each color: [unknown5 (2)][unknown6 (2)][encoded_name][color_id (2)][color_id_dup (2)][0000 (2)]
+            name_encoded = encode_pdb_string(color.name)
+            color_bytes = struct.pack('<HH', 0, 0)  # unknown5, unknown6
+            color_bytes += name_encoded
+            color_bytes += struct.pack('<HHH',
+                color.color_id,
+                color.color_id,
+                0
+            )
+            row_data += color_bytes
+            row_offsets.append(offset)
+
+        # Build RowSets
+        rowsets = self._build_rowsets(row_offsets)
+
+        # Add color data and RowSets
         page += row_data
         page += rowsets
 
