@@ -667,13 +667,19 @@ class HistoryMarshaller(SpecialPageMarshaller):
         # Take only first 32 bytes (page header)
         page = bytearray(page_header[:32])
 
-        # Special structure (bytes 32-63)
-        page += struct.pack('<I', 1)  # 0x20-0x23: Row count marker
+        # Special structure (bytes 32-63) - reference analysis shows:
+        # 0x20-0x23: 02 00 01 00 (special marker)
+        # 0x24-0x27: 00 00 00 00 (padding)
+        # 0x28-0x2B: 80 02 00 00 (special marker)
+        # 0x2C-0x2F: 00 00 00 00 (padding - 4 bytes)
+        # 0x30-0x33: 00 00 00 00 (padding - 4 bytes)
+        # Total: 20 bytes, date starts at 0x34
+        page += struct.pack('<I', 0x00010002)  # 0x20-0x23: Special marker
         page += struct.pack('<I', 0)  # 0x24-0x27: Padding
         page += struct.pack('<I', 0x0280)  # 0x28-0x2B: Special marker
-        page += b'\x00' * 8  # 0x2C-0x33: Padding (8 bytes)
+        page += b'\x00' * 8  # 0x2C-0x33: Padding (8 bytes total)
 
-        # Date field (bytes 64-75)
+        # Date field starts at offset 0x34 (52)
         # Format: [length_marker (1)][date (10)][unknown1 (1)]
         # NOTE: No padding between date and unknown1!
         page += struct.pack('<B', 0x17)  # Length marker

@@ -266,11 +266,20 @@ class PDBWriterV3:
         table_idx = self.TABLE_TYPES.index(table_type)
         empty_candidate = self._get_empty_candidate(table_idx)
 
+        # Tables that use page_flags=0x24 (multi-page data tables)
+        # History uses 0x34 (normal data page), Tracks uses 0x34 (normal data page)
+        multi_page_flag_tables = {'Colors', 'Columns', 'Unknown17', 'Unknown18',
+                                   'Genres', 'Artists', 'Albums', 'Keys',
+                                   'PlaylistTree', 'PlaylistEntries', 'Artwork'}
+        use_page_flags_0x24 = table_type in multi_page_flag_tables
+
         # Check if we need to create or initialize data page
         # After _ensure_all_tables_exist(), we might have a zero placeholder that needs initializing
         if len(pages) == 1:
             # Only have index page, create first data page
             data_page = DataPage(page_index=0, page_type=page_type)
+            # Set correct page_flags based on table type
+            data_page.header.page_flags = 0x24 if use_page_flags_0x24 else 0x34
             data_page.header.next_page = empty_candidate  # CRITICAL: Set next_page for data pages
             pages.append(data_page)
             # Add this data page to index
@@ -282,7 +291,7 @@ class PDBWriterV3:
             current_page = pages[-1]
             delattr(current_page, '_is_zero_placeholder')
             # Set proper page flags for data page
-            current_page.header.page_flags = 0x34
+            current_page.header.page_flags = 0x24 if use_page_flags_0x24 else 0x34
             # CRITICAL: Set next_page for data pages
             current_page.header.next_page = empty_candidate
         else:
@@ -302,6 +311,8 @@ class PDBWriterV3:
         if current_page.heap.free_size() < estimated_size + 100:
             # Need new page
             new_page = DataPage(page_index=0, page_type=page_type)
+            # Set correct page_flags based on table type
+            new_page.header.page_flags = 0x24 if use_page_flags_0x24 else 0x34
             new_page.header.next_page = 0xFFFFFFFF
             current_page.header.next_page = 0  # Will be corrected later
             pages.append(new_page)
@@ -1018,7 +1029,8 @@ class PDBWriterV3:
         if num_pages > 1:
             # Determine if this is a multi-page table (Colors, Columns, Unknown17, Unknown18, History)
             # These tables have actual DataPages as continuation
-            multi_page_tables = {'Colors', 'Columns', 'Unknown17', 'Unknown18', 'History'}
+            multi_page_tables = {'Colors', 'Columns', 'Unknown17', 'Unknown18', 'History',
+                                 'Genres', 'Artists', 'Albums'}
             is_multi_page = table_type in multi_page_tables
 
             if is_multi_page:
@@ -1064,12 +1076,20 @@ class PDBWriterV3:
                     # Create a DataPage as a placeholder, but mark it for replacement
                     page = DataPage(page_index=page_num, page_type=page_type)
                     page.header.num_rows_small = 0
-                    page.header.page_flags = 0x00  # Empty data page
+
+                    # Artwork pages need special flags (0x24), other empty pages use 0x00
+                    if table_type == 'Artwork':
+                        page.header.page_flags = 0x24  # Artwork data page flag
+                    else:
+                        page.header.page_flags = 0x00  # Empty data page
+
                     page.header.next_page = 0
 
                     # Mark this page to be replaced with zero bytes
                     # We store a special attribute
-                    page._is_zero_placeholder = True
+                    # EXCEPTION: Artwork pages need proper headers, not zeros
+                    if table_type != 'Artwork':
+                        page._is_zero_placeholder = True
 
                     self.pages[table_type].append(page)
 
@@ -1124,11 +1144,19 @@ class PDBWriterV3:
             # Single-page tables: Create a zero placeholder page
             page = DataPage(page_index=page_num, page_type=page_type)
             page.header.num_rows_small = 0
-            page.header.page_flags = 0x00  # Empty data page
+
+            # Artwork pages need special flags (use 0x24 like other multi-page tables)
+            if table_type == 'Artwork':
+                page.header.page_flags = 0x24  # Artwork data page flag
+            else:
+                page.header.page_flags = 0x00  # Empty data page
+
             page.header.next_page = 0
 
             # Mark this page to be replaced with zero bytes
-            page._is_zero_placeholder = True
+            # EXCEPTION: Artwork pages need proper headers, not zeros
+            if table_type != 'Artwork':
+                page._is_zero_placeholder = True
 
             self.pages[table_type].append(page)
 
