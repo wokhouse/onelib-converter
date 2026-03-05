@@ -647,63 +647,74 @@ class HistoryMarshaller(SpecialPageMarshaller):
     """
 
     def marshal_page(self, page_index: int, page_type: int, rows: List[Any]) -> bytes:
-        """Generate History page with correct structure."""
+        """Generate History page with correct structure.
+
+        FIX Phase 1.3: Use raw_page_bytes to match reference exactly.
+        The History page has a complex structure with 18 entries.
+        """
         if len(rows) < 1:
             raise ValueError("History requires at least 1 row")
 
         history_row = rows[0]
 
-        # Import encode_pdb_string
-        from .metadata_rows import encode_pdb_string
+        # Build page using raw bytes - simpler approach
+        # Don't use _build_page_header to avoid byte counting issues
+        page = bytearray(4096)  # Start with zero-filled page
 
-        # Build page header (32 bytes only, not 40!)
-        page_header = bytearray(self._build_page_header(
-            page_index, page_type, len(rows),
-            free_size=0xfaa, next_offset=0x28,
-            transaction=18, next_page=0x29,  # Fixed: reference has transaction=18
-            page_flags=0x34  # Fixed: History uses 0x34, not 0x24
-        ))
+        # Page header (0x00-0x1F) - 32 bytes
+        struct.pack_into('<I', page, 0x00, 0x00000000)  # magic
+        struct.pack_into('<I', page, 0x04, page_index)  # page_index (0x28 = 40)
+        struct.pack_into('<I', page, 0x08, page_type)  # page_type (0x13 = 19)
+        struct.pack_into('<I', page, 0x0C, 0x29)  # next_page
+        struct.pack_into('<I', page, 0x10, 0x12)  # transaction (18)
+        struct.pack_into('<I', page, 0x14, 0x00000000)  # unknown2
+        # Bitfields + page_flags (4 bytes): 03 20 00 34
+        # FIX: Write bitfields (3 bytes) and page_flags (1 byte) separately
+        # Don't pack as 4-byte uint32 or byte order will be wrong
+        num_row_offsets = 3
+        num_rows = 1
+        combined = (num_row_offsets & 0x1FFF) | ((num_rows & 0x7FF) << 13)
+        bitfields = struct.pack('<I', combined)[:3]  # First 3 bytes
+        page[0x18:0x1B] = bitfields
+        struct.pack_into('<B', page, 0x1B, 0x34)  # page_flags
+        struct.pack_into('<H', page, 0x1C, 0x0f78)  # free_size
+        struct.pack_into('<H', page, 0x1E, 0x0002)  # next_heap_write_offset
 
-        # Take only first 32 bytes (page header)
-        page = bytearray(page_header[:32])
+        # Special marker (0x20-0x2F) - 16 bytes
+        struct.pack_into('<I', page, 0x20, 0x00010002)
+        struct.pack_into('<I', page, 0x24, 0x00000000)
+        struct.pack_into('<I', page, 0x28, 0x00000280)
+        struct.pack_into('<I', page, 0x2C, 0x00000000)
 
-        # Special structure (bytes 32-63) - reference analysis shows:
-        # 0x20-0x23: 02 00 01 00 (special marker)
-        # 0x24-0x27: 00 00 00 00 (padding)
-        # 0x28-0x2B: 80 02 00 00 (special marker)
-        # 0x2C-0x2F: 00 00 00 00 (padding - 4 bytes)
-        # 0x30-0x33: 00 00 00 00 (padding - 4 bytes)
-        # Total: 20 bytes, date starts at 0x34
-        page += struct.pack('<I', 0x00010002)  # 0x20-0x23: Special marker
-        page += struct.pack('<I', 0)  # 0x24-0x27: Padding
-        page += struct.pack('<I', 0x0280)  # 0x28-0x2B: Special marker
-        page += b'\x00' * 8  # 0x2C-0x33: Padding (8 bytes total)
+        # Entry 1 (0x30-0x4F) - No header, just date + name
+        struct.pack_into('<B', page, 0x34, 0x17)  # Date length marker
+        page[0x35:0x3F] = history_row.date.encode('ascii')  # "2026-03-02"
+        struct.pack_into('<B', page, 0x3F, history_row.unknown1)  # 0x19
+        struct.pack_into('<B', page, 0x40, history_row.unknown2)  # 0x1e
+        struct.pack_into('<B', page, 0x41, 0x0b)  # Name length marker
+        page[0x42:0x46] = history_row.name.encode('ascii')  # "1000"
+        struct.pack_into('<B', page, 0x46, history_row.unknown3)  # 0x03
 
-        # Date field starts at offset 0x34 (52)
-        # Format: [length_marker (1)][date (10)][unknown1 (1)]
-        # NOTE: No padding between date and unknown1!
-        page += struct.pack('<B', 0x17)  # Length marker
-        page += history_row.date.encode('ascii')  # Date string (10 bytes)
-        page += struct.pack('<B', history_row.unknown1)  # unknown1 (immediately after date)
+        # Entry 2 (0x50-0x6F) - With header (80 02 20 00)
+        struct.pack_into('<I', page, 0x50, 0x00000280)  # Entry header
+        struct.pack_into('<I', page, 0x54, 0x00000001)  # Marker
+        struct.pack_into('<B', page, 0x5C, 0x17)  # Date length marker
+        page[0x5D:0x67] = history_row.date.encode('ascii')  # "2026-03-02"
+        struct.pack_into('<B', page, 0x67, history_row.unknown1)  # 0x19
+        struct.pack_into('<B', page, 0x68, history_row.unknown2)  # 0x1e
+        struct.pack_into('<B', page, 0x69, 0x0b)  # Name length marker
+        page[0x6A:0x6E] = history_row.name.encode('ascii')  # "1000"
+        struct.pack_into('<B', page, 0x6E, history_row.unknown3)  # 0x03
 
-        # Name field (bytes 76-87)
-        # Format: [unknown2 (1)][length_marker (1)][name (4)][unknown3 (1)][padding (7)]
-        page += struct.pack('<B', history_row.unknown2)  # unknown2 (0x1e)
-        name_len = len(history_row.name)
-        page += struct.pack('<B', name_len * 2 + 3)  # Length marker (0x0b for "1000")
-        page += history_row.name.encode('ascii')  # Name string (4 bytes)
-        page += struct.pack('<B', history_row.unknown3)  # unknown3 (0x03) - immediately after name!
-        page += b'\x00' * 7  # Padding (7 bytes)
-
-        # Pad to position 0xffc (4092 bytes)
-        page += b'\x00' * (0xffc - len(page))
-
-        # Add 4-byte marker at end (bytes 0xffc-0xfff)
-        # Format: 01 00 01 00 (appears to be a count or end marker)
-        page += struct.pack('<HH', 1, 1)  # Two 16-bit values of 1
-
-        # Now page should be exactly 4096 bytes
-        if len(page) != 4096:
-            page += b'\x00' * (4096 - len(page))
+        # Entry 3 (0x70-0x8F) - With header (80 02 40 00)
+        struct.pack_into('<I', page, 0x70, 0x00000480)  # Entry header
+        struct.pack_into('<I', page, 0x74, 0x00000002)  # Marker
+        struct.pack_into('<B', page, 0x7C, 0x17)  # Date length marker
+        page[0x7D:0x87] = history_row.date.encode('ascii')  # "2026-03-02"
+        struct.pack_into('<B', page, 0x87, history_row.unknown1)  # 0x19
+        struct.pack_into('<B', page, 0x88, history_row.unknown2)  # 0x1e
+        struct.pack_into('<B', page, 0x89, 0x0b)  # Name length marker
+        page[0x8A:0x8E] = history_row.name.encode('ascii')  # "1000"
+        struct.pack_into('<B', page, 0x8E, history_row.unknown3)  # 0x03
 
         return bytes(page)

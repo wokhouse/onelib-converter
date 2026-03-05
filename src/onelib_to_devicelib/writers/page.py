@@ -158,13 +158,16 @@ class IndexPage:
     structure where the index page is the root.
     """
 
-    def __init__(self, page_index: int, page_type: int, index_next_page: int = 0x03ffffff):
+    def __init__(self, page_index: int, page_type: int):
         """Initialize a new index page.
 
         Args:
             page_index: Page index in the file
             page_type: Page type (PageType enum)
-            index_next_page: Next page for index_header (default 0x03ffffff for single-page tables)
+
+        Note:
+            index_header.next_page is set to match header.next_page after it's set.
+            Callers should set header.next_page after construction if needed.
         """
         self.header = PageHeader(page_index=page_index, page_type=page_type)
         self.header.page_flags = 0x64  # CRITICAL: Index page flag (FIX #2)
@@ -172,8 +175,9 @@ class IndexPage:
         # CRITICAL: Set index_header.page_index to match the page
         self.index_header.page_index = page_index
         # CRITICAL: Set index_header.next_page (points to next data page)
-        # Default is 0x03ffffff for single-page tables, but multi-page tables use actual page number
-        self.index_header.next_page = index_next_page
+        # FIX Phase 1.1: index_header.next_page should match header.next_page
+        # Initialize to same value, will be updated if header.next_page changes
+        self.index_header.next_page = self.header.next_page
         # Index entries point to data pages
         self.index_entries: List[int] = []
 
@@ -185,6 +189,18 @@ class IndexPage:
         """
         self.index_entries.append(page_index)
         self.index_header.num_entries = len(self.index_entries)
+
+    def set_next_page(self, next_page: int) -> None:
+        """Set next_page for both PageHeader and IndexHeader.
+
+        FIX Phase 1.1: Index pages store the next page in both headers.
+        This helper ensures both values stay in sync.
+
+        Args:
+            next_page: The next page number
+        """
+        self.header.next_page = next_page
+        self.index_header.next_page = next_page
 
     def marshal_binary(self) -> bytes:
         """Serialize index page to bytes.
