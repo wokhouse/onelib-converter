@@ -532,3 +532,5 @@ class Converter:
         metadata_writer = MetadataWriter(self.output_path)
         metadata_writer.write_devsetting()
         metadata_writer.write_device_lib_backup()
+        metadata_writer.write_djprofile()  # CRITICAL: djprofile.nxs is required for rekordbox hardware
+        metadata_writer.write_extracted_gcred()  # CRITICAL: gcred.dat is required for rekordbox hardware

@@ -123,8 +123,8 @@ class PDBReader:
             'next_heap_write_offset': next_off
         }
 
-        # Parse data header (8 bytes)
-        unk5, num_large, unk6, unk7 = struct.unpack('<HHHH', page_data[40:48])
+        # Parse data header (8 bytes at bytes 32-39)
+        unk5, num_large, unk6, unk7 = struct.unpack('<HHHH', page_data[32:40])
 
         data_header = {
             'unknown5': unk5,

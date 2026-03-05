@@ -150,28 +150,80 @@ class LabelRow:
 class KeyRow:
     """Key table row (Table 5).
 
-    Structure:
-    - row_offset (2 bytes): Always 0x0A
-    - index_shift (2 bytes): Row index shifted by 0x20
+    CORRECTED STRUCTURE (from reference Page 12 analysis):
+    - str_marker (1 byte): Always 0x07 for 2-char keys
+    - char1 (1 byte): First character (e.g., 'C' for "Cm")
+    - char2 (1 byte): Second character (e.g., 'm' for "Cm")
+    - null (1 byte): 0x00 terminator
     - key_id (4 bytes): Key ID
-    - name (DeviceSQL string): Key name (e.g., "C maj", "A min")
+    - key_id_dup (4 bytes): DUPLICATE of key_id (unknown purpose)
+
+    Total: EXACTLY 12 bytes (fixed length)
     """
 
     key_id: int
-    name: str
+    name: str  # Will be converted to 2-character format
+
+    def _convert_to_2char_format(self, name: str) -> tuple:
+        """Convert key name to 2-character format.
+
+        Converts from:
+        - "C maj" -> "C" + " " (note + space for major)
+        - "C min" -> "C" + "m" (note + 'm' for minor)
+        - "C# maj" -> "C" + "#" (note + '#' for sharp major)
+        - "C# min" -> "#" + "m" (sharp '#' + 'm' for sharp minor)
+
+        Reference format uses 2 chars: note (or sharp) + modifier.
+        """
+        if not isinstance(name, str):
+            return ' ', ' '
+
+        # Handle major keys
+        if 'maj' in name:
+            # Extract note (handles C, C#, Db, etc.)
+            name = name.strip()
+            if '#' in name:
+                # Sharp major: "C# maj" -> "#" + " "
+                return '#', ' '
+            elif 'b' in name:
+                # Flat major: "Db maj" -> "Db" but we only have 2 chars...
+                # Reference uses "b" for flats? Let's use first 2 chars
+                return name[0], name[1] if len(name) > 1 else ' '
+            else:
+                # Natural major: "C maj" -> "C" + " "
+                return name[0], ' '
+
+        # Handle minor keys
+        elif 'min' in name:
+            name = name.strip()
+            if '#' in name:
+                # Sharp minor: "C# min" -> "#" + "m"
+                return '#', 'm'
+            elif 'b' in name:
+                # Flat minor: "Db min" -> first 2 chars
+                return name[0], name[1] if len(name) > 1 else 'm'
+            else:
+                # Natural minor: "C min" -> "C" + "m"
+                return name[0], 'm'
+
+        # Fallback: take first 2 chars
+        return name[0] if len(name) > 0 else ' ', name[1] if len(name) > 1 else ' '
 
     def marshal_binary(self, row_index: int) -> bytes:
-        """Marshal row to binary format."""
-        name_encoded = encode_device_sql_string(self.name)
+        """Marshal key as 12-byte fixed entry."""
+        # Convert to 2-character format
+        char1, char2 = self._convert_to_2char_format(self.name)
 
-        # Build row: [row_offset (2)] [index_shift (2)] [key_id (4)] [name]
-        row = bytearray()
-        row.extend(struct.pack('<H', 0x0A))  # row_offset
-        row.extend(struct.pack('<H', row_index & 0xFFFF))  # index_shift
-        row.extend(struct.pack('<I', self.key_id))  # key_id
-        row.extend(name_encoded)
+        # Build 12-byte entry in CORRECT ORDER:
+        # [str_marker (1)] [char1 (1)] [char2 (1)] [null (1)] [key_id (4)] [key_id_dup (4)]
+        row = struct.pack('<B', 0x07)  # str_marker for 2-char string
+        row += char1.encode('ascii')
+        row += char2.encode('ascii')
+        row += b'\x00'  # null terminator
+        row += struct.pack('<II', self.key_id, self.key_id)  # key_id + dup
 
-        return bytes(row)
+        assert len(row) == 12, f"KeyRow must be exactly 12 bytes, got {len(row)}"
+        return row
 
 
 @dataclass

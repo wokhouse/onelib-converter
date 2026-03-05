@@ -14,12 +14,12 @@ class TwoWayHeap:
     - Middle: Padding fills the gap
     """
 
-    def __init__(self, page_size: int = 4096, data_header_size: int = 48):
+    def __init__(self, page_size: int = 4096, data_header_size: int = 40):
         """Initialize two-way heap.
 
         Args:
             page_size: Total page size in bytes (default 4096)
-            data_header_size: Size of page header to reserve (48 for 32-byte page + 16-byte data header)
+            data_header_size: Size of page header to reserve (40 for 32-byte page + 8-byte data header)
 
         Note: The heap_prefix is stored separately for special pages (Columns, Unknown18)
         but is NOT included in to_bytes() output for normal pages.

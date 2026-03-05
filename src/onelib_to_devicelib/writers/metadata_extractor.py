@@ -76,11 +76,12 @@ class MetadataExtractor:
                 self.labels[track.label] = self._next_label_id
                 self._next_label_id += 1
 
-        # Initialize standard keys
-        for key_name in self.REKORDBOX_KEYS:
-            if key_name not in self.keys:
-                self.keys[key_name] = self._next_key_id
-                self._next_key_id += 1
+            # Extract key (only if track has one)
+            if hasattr(track, 'key') and track.key:
+                key_name = self._normalize_key(track.key)
+                if key_name and key_name not in self.keys:
+                    self.keys[key_name] = self._next_key_id
+                    self._next_key_id += 1
 
     def assign_track_ids(self, track) -> None:
         """Assign metadata IDs to a track.

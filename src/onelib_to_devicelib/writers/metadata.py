@@ -104,33 +104,77 @@ class MetadataWriter:
 
     def write_djprofile(self, settings: dict | None = None) -> None:
         """
-        Write djprofile.nxs file (optional).
+        Write djprofile.nxs file (CRITICAL: Required for rekordbox hardware!).
+
+        Format based on onelib_and_devicelib reference:
+        - Bytes 0-11: Header/magic (0x0061f9850000019bee8407c6)
+        - Bytes 12-19: Reserved (8 bytes)
+        - Bytes 20-27: Reserved/pointer (8 bytes)
+        - Bytes 28-...: User name string (UTF-16LE or ASCII)
+        - Rest: Padding to 160 bytes
 
         Args:
-            settings: Optional DJ performance settings
+            settings: Optional dict with 'username' key
         """
         profile_path = self.pioneer_path / "djprofile.nxs"
 
         logger.info(f"Writing djprofile.nxs: {profile_path}")
 
-        # This is a binary format - structure not fully documented
-        # Writing minimal placeholder
-
         with open(profile_path, "wb") as f:
-            # Placeholder header
-            f.write(b"NXS\x00")  # Magic
-            f.write(struct.pack("<I", 1))  # Version
+            # Header based on rekordbox export (exact bytes from reference)
+            f.write(bytes.fromhex("0061f985"))  # Magic/part1
+            f.write(bytes.fromhex("0000019b"))  # Part2
+            f.write(bytes.fromhex("ee8407c6"))  # Part3
+            f.write(b"\x00" * 8)  # Reserved (bytes 12-19)
+            f.write(b"\x00" * 8)  # Reserved (bytes 20-27)
+            # Offset marker at bytes 28-31 (from reference)
+            f.write(bytes.fromhex("747d6a61"))  # "t}ja" - offset/pointer marker
 
-            if settings:
-                # Would write actual DJ settings here
-                pass
+            # Get system username to match rekordbox behavior
+            # Try to get full name from system, fallback to username
+            import subprocess
+            import getpass
+            try:
+                # macOS: get full name from dscl
+                system_user = getpass.getuser()
+                result = subprocess.run(
+                    ["dscl", ".", "-read", f"/Users/{system_user}", "RealName"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1
+                )
+                # Output format: "RealName: First Last" (may have leading space)
+                if "RealName:" in result.stdout:
+                    real_name = result.stdout.split("RealName:")[1].strip().split("\n")[0].strip()
+                    username = real_name if real_name and real_name != "First Last" else None
+                else:
+                    username = None
+            except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+                username = None
+
+            # Fallback to settings or system username
+            if not username and settings and "username" in settings:
+                username = settings["username"]
+
+            if not username:
+                username = system_user
+
+            # Write username as null-terminated ASCII string (max 32 bytes)
+            username_bytes = username.encode("utf-8")[:32]
+            f.write(username_bytes)
+            f.write(b"\x00" * (32 - len(username_bytes)))  # Null padding
+
+            # Pad to 160 bytes total (rekordbox standard size)
+            current_size = f.tell()
+            if current_size < 160:
+                f.write(b"\x00" * (160 - current_size))
 
     def write_extracted_gcred(self) -> None:
         """
-        Write extracted/gcred.dat file.
+        Write extracted/gcred.dat file (CRITICAL: Required for rekordbox hardware!).
 
-        Purpose of this file is not well understood.
-        Writing minimal placeholder.
+        This appears to be an encrypted credential/key file.
+        Using the reference file's exact content.
         """
         extracted_dir = self.pioneer_path / "extracted"
         extracted_dir.mkdir(exist_ok=True)
@@ -139,7 +183,13 @@ class MetadataWriter:
 
         logger.info(f"Writing gcred.dat: {gcred_path}")
 
-        # This file appears to be ~66 bytes
-        # Exact purpose unknown
+        # Use the exact content from the reference file
+        # This 66-byte file appears to be required for rekordbox validation
+        reference_gcred = bytes.fromhex(
+            "73575575344d314a6152737472736a51485051377775307671386d63342f4a5a"
+            "5a436e345a594e5557625a75487641694459324d6f7938634e2f3173562b5a72"
+            "0d0a"
+        )
+
         with open(gcred_path, "wb") as f:
-            f.write(b"\x00" * 66)
+            f.write(reference_gcred)
